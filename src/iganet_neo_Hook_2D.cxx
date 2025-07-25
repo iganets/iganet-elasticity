@@ -212,8 +212,8 @@ public:
 
   void write_result() {
     // write geometry and solution spline data to file
-    appendToJsonFile("G", Base::G_.template to_json());
-    appendToJsonFile("u", Base::u_.template to_json());
+    appendToJsonFile("G", Base::G_.to_json());
+    appendToJsonFile("u", Base::u_.to_json());
   }
 
 
@@ -266,8 +266,8 @@ public:
       return true;
     } else if (epoch == MAX_EPOCH_-1) {
         // write geometry and solution spline data to file
-        appendToJsonFile("G", Base::G_.template to_json());
-        appendToJsonFile("u", Base::u_.template to_json());
+        appendToJsonFile("G", Base::G_.to_json());
+        appendToJsonFile("u", Base::u_.to_json());
     }
       return false;
   }
@@ -403,10 +403,10 @@ public:
     // print the loss values
     std::cout << std::setw(11) << totalLoss.item<double>() << " = " << singleLossOutput.str() << std::endl;
 
-    if ((torch::abs(this->previous_loss - totalLoss) < this->scaling_threshold).item<bool>() && (this->DIRICHLET_SCALING < 1.0)) {
+    if ((torch::abs(this->previous_loss - totalLoss) < this->scaling_threshold).template item<bool>() && (this->DIRICHLET_SCALING < 1.0)) {
         this->DIRICHLET_SCALING += 0.01;
         this->initialize_dirichlet_boundaries();
-        this->reset_optimizer();
+        this->optimizerReset();
         std::cout << "\n\nIncreased Dirichlet scaling factor\n\n" << std::endl;
     }
     this->previous_loss = totalLoss;
