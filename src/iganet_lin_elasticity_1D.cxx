@@ -4,7 +4,7 @@
 using namespace iganet::literals;
 
 /// @brief Specialization of the IgANet class for linear elasticity in 3D
-template <typename Optimizer, typename GeometryMap, typename Variable>
+template <typename real_t, typename Optimizer, typename GeometryMap, typename Variable>
 class linear_elasticity : public iganet::IgANet<Optimizer, GeometryMap, Variable>,
                           public iganet::IgANetCustomizable<GeometryMap, Variable> {
 
@@ -23,12 +23,12 @@ private:
   typename Customizable::geometryMap_interior_coeff_indices_type G_coeff_indices_;
 
   // Material properties
-  double E_; // Young's modulus
+  real_t E_; // Young's modulus
 
 public:
   /// @brief Constructor
   template <typename... Args>
-  linear_elasticity(double E, std::vector<int64_t> &&layers,
+  linear_elasticity(real_t E, std::vector<int64_t> &&layers,
                     std::vector<std::vector<std::any>> &&activations, Args &&...args)
       : Base(std::forward<std::vector<int64_t>>(layers),
              std::forward<std::vector<std::vector<std::any>>>(activations),
@@ -75,11 +75,11 @@ public:
 
     // Compute strain
     auto hess = Base::u_.ihess(Base::G_, collPts_.first);
-    
+
     int nr_of_eval_collPts = std::get<0>(collPts_.first).size(0);
 
     // Compute the derivative of the stress
-    auto der_stress = E_ * *(hess[0][0]);
+    auto der_stress = E_ * hess(0);
 
     auto u_bdr = Base::u_.eval(iganet::utils::to_tensorArray({0.0, 1.0}));
     auto bdr = ref_.eval(iganet::utils::to_tensorArray({0.0, 1.0}));
@@ -102,8 +102,10 @@ int main() {
   iganet::init();
   iganet::verbose(std::cout);
 
+  using real_t = double;
+
   // User inputs for material properties and external forces
-  double E = 210;
+  real_t E = 210;
 
   nlohmann::json json;
   json["res0"] = 50;
@@ -112,12 +114,11 @@ int main() {
 
   using namespace iganet::literals;
   using optimizer_t = torch::optim::LBFGS;
-  using real_t = double;
 
   using geometry_t = iganet::S<iganet::UniformBSpline<real_t, 1, 2>>;
   using variable_t = iganet::S<iganet::UniformBSpline<real_t, 1, 2>>;
 
-  linear_elasticity<optimizer_t, geometry_t, variable_t>
+  linear_elasticity<real_t, optimizer_t, geometry_t, variable_t>
       net(E, // Material properties
           {25, 25},
           // Activation functions
@@ -140,7 +141,7 @@ int main() {
   //       return std::array<real_t, 1>{0.0};
   //     }
   //     );
-  
+
   //   // Impose boundary conditions (Dirichlet BCs)
   // net.ref().boundary().template side<2>().transform(
   //     [](const std::array<real_t, 0> xi) {
@@ -163,7 +164,7 @@ int main() {
   auto t2 = std::chrono::high_resolution_clock::now();
   iganet::Log(iganet::log::info)
       << "Training took "
-      << std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1)
+      << std::chrono::duration_cast<std::chrono::duration<real_t>>(t2 - t1)
              .count()
       << " seconds\n";
 
@@ -183,25 +184,25 @@ int main() {
 //   real_t youngsModulus = 210.0;
 
 //   // creating a multi-patch object for the geometry
-//   gsMultiPatch<real_t> geometry;
+//   gismo::gsMultiPatch<real_t> geometry;
 //   // adding the geometry as a patch
 //   geometry.addPatch(G_gismo);
 //   // creating a multi-basis object for the geometry
-//   gsMultiBasis<> basis(geometry);
+//   gismo::gsMultiBasis<> basis(geometry);
 
 //   // creating boundary condition variable
-//   gsBoundaryConditions<real_t> bcInfo;
+//   gismo::gsBoundaryConditions<real_t> bcInfo;
 
 //   // setting dirichlet boundary conditions
-//   bcInfo.addCondition(0, boundary::left, condition_type::dirichlet, gsConstantFunction<real_t> (0.0, 1));
-//   bcInfo.addCondition(0, boundary::right, condition_type::dirichlet, gsConstantFunction<real_t> (1.0, 1));
+//   bcInfo.addCondition(0, boundary::left, condition_type::dirichlet, gismo::gsConstantFunction<real_t> (0.0, 1));
+//   bcInfo.addCondition(0, boundary::right, condition_type::dirichlet, gismo::gsConstantFunction<real_t> (1.0, 1));
 
 //   // setting body force to zero for this calculation
-//   gsConstantFunction<real_t> body_force(0., 1);
-//   gsInfo << "Geometry dimension: " << geometry.parDim() << "\n";
+//   gismo::gsConstantFunction<real_t> body_force(0., 1);
+//   gismo::gsInfo << "Geometry dimension: " << geometry.parDim() << "\n";
 
-//   // initializing the elasticity assembler with the material behavior 
-//   gsElasticityAssembler<real_t> assembler(geometry, basis, bcInfo, body_force);
+//   // initializing the elasticity assembler with the material behavior
+//   gismo::gsElasticityAssembler<real_t> assembler(geometry, basis, bcInfo, body_force);
 //   assembler.options().setReal("YoungsModulus", youngsModulus);
 //   assembler.options().setInt("DirichletValues", dirichlet::l2Projection);
 
@@ -209,23 +210,23 @@ int main() {
 //   assembler.assemble();
 
 //   // solving the system
-//   gsSparseSolver<>::CGDiagonal solver;
-//   gsMatrix<real_t> solution;
+//   gismo::gsSparseSolver<>::CGDiagonal solver;
+//   gismo::gsMatrix<real_t> solution;
 //   solver.compute(assembler.matrix());
 //   solution = solver.solve(assembler.rhs());
 
 //   // creating a multi-patch object for the solution
-//   gsMultiPatch<real_t> solution_patch;
+//   gismo::gsMultiPatch<real_t> solution_patch;
 //   // constructing the solution
 //   assembler.constructSolution(solution, assembler.allFixedDofs(), solution_patch);
-  
+
 //   // creating a mesh object for the control net
-//   gsMesh<real_t> controlNetMesh;
+//   gismo::gsMesh<real_t> controlNetMesh;
 //   // loading the control net of our geometry into the mesh object
 //   geometry.patch(0).controlNet(controlNetMesh);
 
 // #endif
-  
+
   std::cout << net.u() << std::endl;
   net.G().space().operator+=(net.u().space());
   std::cout << net.G() << std::endl;
