@@ -194,8 +194,8 @@ public:
 
   void write_result() {
     // write geometry and solution spline data to file
-    appendToJsonFile("G", Base::G_.template to_json());
-    appendToJsonFile("u", Base::u_.template to_json());
+    appendToJsonFile("G", Base::G_.to_json());
+    appendToJsonFile("u", Base::u_.to_json());
   }
 
 
@@ -206,7 +206,7 @@ public:
 
     if (epoch == 0) {
       // set the solver options
-      this->set_lbfgs_options(SOLVER_OPTS);
+      this->optimizerOptionsReset(SOLVER_OPTS);
 
       Base::inputs(epoch);
 
@@ -278,8 +278,8 @@ public:
       return true;
     } 
     else if (epoch == 2) {
-        this->reset_optimizer();
-        this->set_lbfgs_options(SOLVER_OPTS);
+        this->optimizerReset();
+        this->optimizerOptionsReset(SOLVER_OPTS);
     }
     else if (epoch == MAX_EPOCH_-1) {
         // write geometry and solution spline data to file
