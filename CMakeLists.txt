@@ -25,7 +25,7 @@ project(IgANet-Elasticity)
 
 add_library(iganet_elasticity_interface INTERFACE)
 add_library(iganet::elasticity ALIAS iganet_elasticity_interface)
-target_include_directories(iganet_elasticity INTERFACE ${PROJECT_SOURCE_DIR}/src ${PROJECT_BINARY_DIR}/src)
+target_include_directories(iganet_elasticity_interface INTERFACE ${PROJECT_SOURCE_DIR}/src ${PROJECT_BINARY_DIR}/src)
 
 ########################################################################
 # IgANets (core)
