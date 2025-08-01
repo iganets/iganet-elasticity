@@ -43,7 +43,8 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
       URL https://github.com/IgANets/iganet/archive/refs/heads/master.zip
     )
   endif()
-     
+
+  set(IGANET_WITH_GISMO ON CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(iganet_core)
   FetchContent_GetProperties(iganet_core)
   
