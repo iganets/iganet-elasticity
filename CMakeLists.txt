@@ -14,6 +14,8 @@
 
 cmake_minimum_required (VERSION 3.24)
 
+include(FetchContent)
+
 ########################################################################
 #
 # Project: IgANet-Elasticity
@@ -23,24 +25,25 @@ project(IgANet-Elasticity)
 
 add_library(iganet_elasticity_interface INTERFACE)
 add_library(iganet::elasticity ALIAS iganet_elasticity_interface)
+target_include_directories(iganet_elasticity_interface INTERFACE ${PROJECT_SOURCE_DIR}/src ${PROJECT_BINARY_DIR}/src)
 
 ########################################################################
 # IgANets (core)
 ########################################################################
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-  include(FetchContent)
-  FetchContent_Declare(
-    iganet_core
-    URL https://github.com/IgANets/iganet/archive/refs/heads/master.zip
-  )
-  set(IGANET_WITH_GISMO ON CACHE BOOL "" FORCE)  
 
-  find_package(Torch REQUIRED)
-
-  # Fake 'torch' target to satisfy iganet::core's incorrect use
-  target_include_directories(torch INTERFACE ${TORCH_INCLUDE_DIRS})
-  target_link_libraries(torch INTERFACE ${TORCH_LIBRARIES})
-  target_compile_options(torch INTERFACE ${TORCH_CXX_FLAGS})
+  if(EXISTS "${CMAKE_SOURCE_DIR}/.git")
+    FetchContent_Declare(
+      iganet_core
+      GIT_REPOSITORY https://github.com/iganets/iganet.git
+    )
+  else()  
+    FetchContent_Declare(
+      iganet_core
+      URL https://github.com/IgANets/iganet/archive/refs/heads/master.zip
+    )
+  endif()
+     
   FetchContent_MakeAvailable(iganet_core)
   FetchContent_GetProperties(iganet_core)
   
@@ -51,8 +54,6 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
   set(CMAKE_CXX_EXTENSIONS OFF)
 endif()
-
-target_include_directories(iganet_elasticity_interface INTERFACE ${PROJECT_SOURCE_DIR}/src ${PROJECT_BINARY_DIR}/src)
 
 ########################################################################
 # Collect sources
