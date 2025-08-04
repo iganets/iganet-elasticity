@@ -7,8 +7,10 @@
     "max_epoch": 100,
     "min_loss": 1e-8,
     "supervised_learning": false,
-    "json_path": "/home/isabellaunix/DevelDA/singerDA/results/results.json",
-    "USERINPUT": false
+    "json_path": "/home/isabellaunix/DevelDA/singerDA/ConfigResult/result.json",
+    "USERINPUT": false,
+    "layers": [25, 25],
+    "activations": ["sigmoid","sigmoid","none"]
   },
   "reference_simulation": {
     "run": false,
@@ -27,5 +29,12 @@
     ],
     "tfbc_sides": [3, 4]
   },
-  "body_force": [0.0, 0.0]
+  "body_force": [0.0, 0.0],
+  "matlab": {
+    "s1": 0,
+    "s2_diri": [0.05, 0],
+    "s3": 0,
+    "s4": 0,
+    "nrCtrlPts": [8, 8]
+  }
 }

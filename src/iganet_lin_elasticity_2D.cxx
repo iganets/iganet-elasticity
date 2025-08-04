@@ -1055,7 +1055,7 @@ int main() {
     int MAX_EPOCH = 100;
     double MIN_LOSS = 1e-8;
     bool SUPERVISED_LEARNING = false;
-    std::string JSON_PATH = "/home/isabellaunix/DevelDA/singerDA/results/results.json";       
+    std::string JSON_PATH = "/home/isabellaunix/DevelDA/singerDA/ConfigResult/results.json";       
 
     // reference simulation parameters
     bool RUN_REF_SIM = false;
