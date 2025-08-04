@@ -25,6 +25,8 @@ private:
   typename Base::variable_collPts_type collPts_;
   typename Base::variable_collPts_type interiorCollPts_;
   std::array<torch::Tensor, 2ul> tractionCollPts_;
+  torch::Tensor slice_left;
+  torch::Tensor slice_right;
 
   int nrCollPts_;
   Variable ref_;
@@ -215,16 +217,18 @@ public:
 
       // Get the collocation points on all boundaries
       auto &collPts_boundary = collPts_.second;
-      // Extract left and right side, indices 0 and 1
-      auto &left = std::get<1>(collPts_boundary);
+      // Extract left and right side, indices 2 and 3 (for hinge geometry they are the same)
+      auto &left = std::get<2>(collPts_boundary);
       auto &right = std::get<3>(collPts_boundary);
+      slice_left = left[0].slice(0, 1, -1);
+      slice_right = right[0].slice(0, 1, -1);
       // Transfer those collocation points to new vectors, get rid of corner points in the process
       std::vector<torch::Tensor> tractionCollPtsX;
       std::vector<torch::Tensor> tractionCollPtsY;
-      tractionCollPtsX.push_back(left[0].slice(0, 1, -1));
-      tractionCollPtsY.push_back(left[1].slice(0, 1, -1));
-      tractionCollPtsX.push_back(right[0].slice(0, 1, -1));
-      tractionCollPtsY.push_back(right[1].slice(0, 1, -1));
+      tractionCollPtsX.push_back(torch::zeros({slice_left.size(0)}));
+      tractionCollPtsY.push_back(slice_left);
+      tractionCollPtsX.push_back(torch::ones({slice_right.size(0)}));
+      tractionCollPtsY.push_back(slice_right);
 
       tractionCollPts_ = {
         torch::cat(tractionCollPtsX, 0), 
@@ -417,8 +421,33 @@ public:
         auto P21 = mu_ * u2_x_tf - A_tf * u1_y_tf;
         auto P22 = mu_ * (1 + u2_y_tf) + A_tf * (1 + u1_x_tf);
 
-        totalLoss += torch::mse_loss(P12, torch::zeros_like(P12));
-        totalLoss += torch::mse_loss(P22, torch::zeros_like(P22));
+        // Normal Vector at Neumann boundary
+        auto& bdr_left = Base::G_.boundary().template side<2>();
+        auto normal_left = bdr_left.nv(slice_left);
+        auto& bdr_right  = Base::G_.boundary().template side<3>();
+        auto normal_right = bdr_right.nv(slice_right);
+
+        // Extract components of normal vectors
+        auto nl_x = normal_left(0, 0);
+        auto nl_y = normal_left(0, 1);
+        auto nr_x = normal_right(0, 0);
+        auto nr_y = normal_right(0, 1);
+
+        iganet::Log(iganet::log::info) << normal_left;
+        iganet::Log(iganet::log::info) << normal_right;
+        iganet::Log(iganet::log::info) << nr_x;
+        iganet::Log(iganet::log::info) << nr_y;
+
+        // Concatenate normals of left and right side
+        auto normal_x = torch::cat({nl_x, nr_x}, 0);
+        auto normal_y = torch::cat({nl_y, nr_y}, 0);
+
+        // Calculate traction values
+        auto traction_x = P11 * normal_x + P12 * normal_y;
+        auto traction_y = P21 * normal_x + P22 * normal_y;
+        auto traction = torch::stack({traction_x, traction_y}, 1);
+
+        totalLoss += torch::mse_loss(traction, torch::zeros_like(traction));
 
     } else {
         // energy minimization first
