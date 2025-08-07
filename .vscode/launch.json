@@ -9,8 +9,68 @@
             "name": "using elasticity_link",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/.vscode/elasticity_link/iganet_neo_Hook_2D",
+            "program": "${workspaceFolder}/.vscode/elasticity_link/iganet_lin_elasticity_2D",     //iganet_neo_Hook_2D 
             "args": ["","",""],
+            "stopAtEntry": false,
+            "cwd": "${fileDirname}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            // select yout input XML in the editor and hit run
+            "name": "linearElasticity",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/.vscode/elasticity_link/iganet_lin_elasticity_2D", 
+            "args": ["","",""],
+            "stopAtEntry": false,
+            "cwd": "${fileDirname}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            // select yout input XML in the editor and hit run
+            "name": "neoHook",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/.vscode/elasticity_link/iganet_neo_Hook_2D", 
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${fileDirname}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            // select yout input XML in the editor and hit run
+            "name": "spatiallyVaryingMatParam",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/.vscode/elasticity_link/spatiallyVaryingMatParam", 
+            "args": [],
             "stopAtEntry": false,
             "cwd": "${fileDirname}",
             "environment": [],
