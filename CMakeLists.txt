@@ -40,7 +40,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   else()  
     FetchContent_Declare(
       iganet_core
-      URL https://github.com/IgANets/iganet/archive/refs/heads/master.zip
+      URL https://github.com/iganets/iganet/archive/refs/heads/master.zip
     )
   endif()
 
