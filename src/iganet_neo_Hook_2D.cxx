@@ -303,7 +303,7 @@ public:
     // create command line output variable for all the different losses
     std::ostringstream singleLossOutput;
         
-    // first we minimize strain energy, after 20 epochs we change to minimizing divergence according to pde
+    // first we minimize strain energy, after 2 epochs we change to minimizing divergence according to pde
     if (epoch >= 2) {
 
         // Elasticity Loss
@@ -421,8 +421,8 @@ public:
         auto P21 = mu_ * u2_x_tf - A_tf * u1_y_tf;
         auto P22 = mu_ * (1 + u2_y_tf) + A_tf * (1 + u1_x_tf);
 
-        // Normal Vector at Neumann boundary
-        auto& bdr_left = Base::G_.boundary().template side<2>();
+        // Normal Vector at Neumann boundary: 1 - down, 2 - up, 3 - right, 4 - left
+        auto& bdr_left = Base::G_.boundary().template side<4>();
         auto normal_left = bdr_left.nv(slice_left);
         auto& bdr_right  = Base::G_.boundary().template side<3>();
         auto normal_right = bdr_right.nv(slice_right);
@@ -433,21 +433,24 @@ public:
         auto nr_x = normal_right(0, 0);
         auto nr_y = normal_right(0, 1);
 
-        iganet::Log(iganet::log::info) << normal_left;
-        iganet::Log(iganet::log::info) << normal_right;
-        iganet::Log(iganet::log::info) << nr_x;
-        iganet::Log(iganet::log::info) << nr_y;
-
         // Concatenate normals of left and right side
-        auto normal_x = torch::cat({nl_x, nr_x}, 0);
-        auto normal_y = torch::cat({nl_y, nr_y}, 0);
+        auto normal_x = torch::cat({nr_x, nl_x}, 0);
+        auto normal_y = torch::cat({nr_y, nl_y}, 0);
+
+        // Normalize the normal vectors
+        auto length = torch::sqrt(normal_x.pow(2) + normal_y.pow(2));
+        normal_x = normal_x / length;
+        normal_y = normal_y / length;
+
+        //iganet::Log(iganet::log::info) << normal_x;
+        //iganet::Log(iganet::log::info) << normal_y;
 
         // Calculate traction values
         auto traction_x = P11 * normal_x + P12 * normal_y;
         auto traction_y = P21 * normal_x + P22 * normal_y;
         auto traction = torch::stack({traction_x, traction_y}, 1);
 
-        totalLoss += torch::mse_loss(traction, torch::zeros_like(traction));
+        totalLoss += torch::mse_loss(traction, torch::zeros_like(traction)) * 1e7;
 
     } else {
         // energy minimization first
@@ -538,7 +541,7 @@ int main(int argc, char* argv[]) {
   double POISSON_RATIO = 0.3;
 
   // simulation parameters
-  int MAX_EPOCH = 300;
+  int MAX_EPOCH = 100;
   double MIN_LOSS = 1e-9;
   bool SUPERVISED_LEARNING = false;
   bool RUN_REF_SIM = false;
@@ -549,7 +552,7 @@ int main(int argc, char* argv[]) {
   int64_t NR_CTRL_PTS_v = 7;
   int NR_CTRL_PTS_temp = 5;
   constexpr int DEGREE = 3;
-  double nodes_factor = 1.0;
+  double nodes_factor = 3.0;
   std::string json_path_temp = "/home/chg/Programming/IGN_neoHook/03_iganet_solution/";
 
   gsCmdLine cmd("Square being stretched with nonlinear elasticity solver.");
@@ -605,10 +608,9 @@ int main(int argc, char* argv[]) {
       net(// simulation parameters
           lambda, mu, MAX_EPOCH, MIN_LOSS, json_path, solver_options, std::move(DIRI_SIDES),
           // Number of neurons per layer
-          {number_nodes, number_nodes},
+          {number_nodes},
           // Activation functions
           {{iganet::activation::tanh},
-           {iganet::activation::tanh},
            {iganet::activation::none}},
           // Number of B-spline coefficients of the geometry
           std::tuple(iganet::utils::to_array(NR_CTRL_PTS_u, NR_CTRL_PTS_v)),
@@ -619,6 +621,12 @@ int main(int argc, char* argv[]) {
   pugi::xml_document xml;
   xml.load_file(IGANET_DATA_DIR "surfaces/2d/hinge.xml");
   net.G().from_xml(xml);
+  net.G().boundary().from_full_tensor(net.G().as_tensor());
+  //if (! xml.load_file(IGANET_DATA_DIR "surfaces/2d/hinge.xml") )
+  //  std::cerr << "Failed to load hinge.xml\n";
+
+  auto geomJ = net.G().to_json();
+  iganet::Log(iganet::log::info) << geomJ;
 
   // imposing body force
   net.f().transform([=](const std::array<real_t, 2> xi) {
