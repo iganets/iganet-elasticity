@@ -2,7 +2,7 @@
 #include <iostream>
 #include <fstream>
 
-using namespace iganet::literals;
+using namespace iganet::literals;       // @ include\iganet.hpp
 using namespace gismo;
 
 /// @brief Specialization of the IgANet class for linear elasticity in 2D
@@ -57,7 +57,7 @@ public:
   /// @brief Constructor
   template <typename... Args>
   linear_elasticity(double lambda, double mu, bool SUPERVISED_LEARNING, int MAX_EPOCH, 
-                    double MIN_LOSS, std::vector<int> TFBC_SIDES,
+                    double MIN_LOSS, const torch::optim::LBFGSOptions& solver_opts, std::vector<int> TFBC_SIDES,
                     std::vector<std::tuple<int, double, double>> FORCE_SIDES,
                     std::vector<std::tuple<int, double, double>> DIRI_SIDES, 
                     int64_t NR_CTRL_PTS, std::string JSON_PATH, std::vector<int64_t> &&layers, 
@@ -127,7 +127,7 @@ public:
     }
   }
 
-  /// @brief helper function to load the displacements from a JSON file
+  /// @brief helper function to load the matlab displacements from a JSON file
   torch::Tensor loadDisplacements() {
       // create options for the tensor
       auto options = torch::TensorOptions().dtype(torch::kDouble).device(torch::kCPU);
@@ -300,11 +300,9 @@ public:
 }
 
 
-  /// @brief Initializes the epoch
+  /// @brief Initializes the epoch, special behaviour for initial epoch
   bool epoch(int64_t epoch) override {
-    // print epoch number
-    std::cout << "Epoch: " << epoch << std::endl;
-
+    std::cout << "Epoch: " << epoch << std::endl;               // print epoch number
     if (epoch == 0) {
       Base::inputs(epoch);
       collPts_ = Base::variable_collPts(iganet::collPts::greville);
@@ -317,8 +315,8 @@ public:
       for (int i = 0; i < collPtsCoeffs.size(0); ++i) {
           collPtsCoeffs_j.push_back({collPtsCoeffs[i].item<double>()});
       }
-      appendToJsonFile("collPtsCoeffsRef1", collPtsCoeffs_j);
-      appendToJsonFile("nrCollPtsRef1", {nrCollPts_});
+      appendToJsonFile("net_collPtsCoeffsRef1", collPtsCoeffs_j);
+      appendToJsonFile("net_nrCollPtsRef1", {nrCollPts_});
       
 
       var_knot_indices_ =
@@ -637,27 +635,28 @@ public:
             int n_vals = nrCollPts_ - intersecCtr[sideCtr];
 
             for (int i = 0; i < n_vals; ++i) {
-                int idx = pointCtr + i;
-
-                if (side == 1) {
-                    tractionValuesX[idx] =  - lambda_ * (ux_x[idx] + uy_y[idx]) 
-                                            - 2 * mu_ * ux_x[idx];
-                    tractionValuesY[idx] =  - mu_ * (uy_x[idx] + ux_y[idx]);
-                }
-                else if (side == 2) {
-                    tractionValuesX[idx] = lambda_ * (ux_x[idx] + uy_y[idx]) 
-                                           + 2 * mu_ * ux_x[idx];
-                    tractionValuesY[idx] = mu_ * (uy_x[idx] + ux_y[idx]);
-                }
-                else if (side == 3) {
-                    tractionValuesX[idx] =  - mu_ * (uy_x[idx] + ux_y[idx]);
-                    tractionValuesY[idx] =  - lambda_ * (ux_x[idx] + uy_y[idx]) 
-                                            - 2 * mu_ * uy_y[idx];
-                }
-                else if (side == 4) {
-                    tractionValuesX[idx] = mu_ * (uy_x[idx] + ux_y[idx]);
-                    tractionValuesY[idx] = lambda_ * (ux_x[idx] + uy_y[idx]) 
-                                           + 2 * mu_ * uy_y[idx];
+                int idx = pointCtr + i;     //11 oder 12 it. 0 bis 12?
+                
+                switch (side) {
+                    case 1:
+                        tractionValuesX[idx] =  - lambda_ * (ux_x[idx] + uy_y[idx]) - 2 * mu_ * ux_x[idx];
+                        tractionValuesY[idx] =  - mu_ * (uy_x[idx] + ux_y[idx]);
+                        break;
+                    case 2:
+                        tractionValuesX[idx] = lambda_ * (ux_x[idx] + uy_y[idx]) + 2 * mu_ * ux_x[idx];
+                        tractionValuesY[idx] = mu_ * (uy_x[idx] + ux_y[idx]);
+                        break;
+                    case 3: 
+                        tractionValuesX[idx] =  - mu_ * (uy_x[idx] + ux_y[idx]);
+                        tractionValuesY[idx] =  - lambda_ * (ux_x[idx] + uy_y[idx]) - 2 * mu_ * uy_y[idx];
+                        break;
+                    case 4:
+                        tractionValuesX[idx] = mu_ * (uy_x[idx] + ux_y[idx]);
+                        tractionValuesY[idx] = lambda_ * (ux_x[idx] + uy_y[idx]) + 2 * mu_ * uy_y[idx];
+                        break;
+                    default:
+                        std::cerr << "Error: invalid side = " << side << std::endl;
+                        break;
                 }
             }
 
@@ -725,7 +724,7 @@ public:
     torch::Tensor divStressX = torch::zeros({hessianColl(0,0,0).size(0)});
     torch::Tensor divStressY = torch::zeros({hessianColl(0,0,1).size(0)});
 
-    // calculation of the divergence of the stress tensor
+    // calculation of the divergence of the stress tensor, this is what we're trying to minimize
     for (int i = 0; i < hessianColl(0,0,0).size(0); ++i) {
 
         // x-direction
@@ -991,10 +990,10 @@ public:
         }
 
         // write the stresses and poisson ratios to the json file
-        appendToJsonFile("netVmStresses", netVmStresses_j);
-        appendToJsonFile("netXStresses", netXStresses_j);
-        appendToJsonFile("netYStresses", netYStresses_j);
-        appendToJsonFile("netPoisson", netPoisson_j);
+        appendToJsonFile("net_VmStresses", netVmStresses_j);
+        appendToJsonFile("net_XStresses", netXStresses_j);
+        appendToJsonFile("net_YStresses", netYStresses_j);
+        appendToJsonFile("net_Poisson", netPoisson_j);
 
         // CALCULATE THE NEW POSITION OF THE COLLPTS
 
@@ -1019,9 +1018,9 @@ public:
                                            displacementAsTensor[i][1].item<double>()});
         }
         // write the collocation points' original position to the json file
-        appendToJsonFile("collPtsFirstAsTensor", collPtsFirst_j);
+        appendToJsonFile("net_collPtsFirstAsTensor", collPtsFirst_j);
         // write the collocation points' new position to the json file
-        appendToJsonFile("collPtsFirstAfterDisplacementAsTensor", collPtsFirstDispl_j);
+        appendToJsonFile("net_collPtsFirstAfterDisplacementAsTensor", collPtsFirstDispl_j);
 
         // WRITING DIVERGENCE OF THE STRESS TENSOR TO JSON FILE
 
@@ -1034,8 +1033,8 @@ public:
         }
 
         // write the divergence of the stress tensor to the json file
-        appendToJsonFile("netDivergenceX", netDivergenceX_j);
-        appendToJsonFile("netDivergenceY", netDivergenceY_j);
+        appendToJsonFile("net_DivergenceX", netDivergenceX_j);
+        appendToJsonFile("net_DivergenceY", netDivergenceY_j);
     }
     return totalLoss;
   }
@@ -1053,9 +1052,9 @@ int main() {
 
     // simulation parameters
     int MAX_EPOCH = 100;
-    double MIN_LOSS = 1e-8;
+    double MIN_LOSS = 1e-12;
     bool SUPERVISED_LEARNING = false;
-    std::string JSON_PATH = "/home/isabellaunix/DevelDA/singerDA/ConfigResult/results.json";       
+    std::string JSON_PATH = "/home/isabellaunix/DevelDA/singerDA/ConfigResult/result.json";       
 
     // reference simulation parameters
     bool RUN_REF_SIM = false;
@@ -1079,10 +1078,17 @@ int main() {
     // body force (constant over the whole domain)
     std::pair<double, double> BODY_FORCE = {0.0, 0.0}; // {fx, fy}
     
+    auto solver_options = torch::optim::LBFGSOptions(1.0).
+                                        max_iter(50).
+                                        max_eval(75).
+                                        history_size(200).
+                                        tolerance_grad(1e-12).
+                                        tolerance_change(1e-12).
+                                        line_search_fn("strong_wolfe");
 
     // OPTIONAL .json input for easy change of params. no need to rebuild :)
     bool USERINPUT = true;
-    std::ifstream file("config_template.json");
+    std::ifstream file("/home/isabellaunix/DevelDA/singerDA/ConfigResult/config.json");
     if (!file) {
         std::cerr << "Could not open config.json\n";
         return 1;
@@ -1156,20 +1162,20 @@ int main() {
         linear_elasticity_t::RunGismoSimulation(NR_CTRL_PTS, DEGREE, 
             YOUNG_MODULUS, POISSON_RATIO, DIRI_SIDES, FORCE_SIDES, BODY_FORCE);
         
-    linear_elasticity_t
-        net(// simulation parameters
-            lambda, mu, SUPERVISED_LEARNING, MAX_EPOCH, MIN_LOSS, 
-            TFBC_SIDES, FORCE_SIDES, DIRI_SIDES, NR_CTRL_PTS, JSON_PATH,
-            // Number of neurons per layer
-            {25, 25},
-            // Activation functions
-            {{iganet::activation::sigmoid},
-                {iganet::activation::sigmoid},
-                {iganet::activation::none}},
-            // Number of B-spline coefficients of the geometry
-            std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)),
-            // Number of B-spline coefficients of the variable
-            std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)));
+    linear_elasticity_t net( // simulation parameters
+        lambda, mu, SUPERVISED_LEARNING, MAX_EPOCH, MIN_LOSS, solver_options, 
+        TFBC_SIDES, FORCE_SIDES, DIRI_SIDES, NR_CTRL_PTS, JSON_PATH,
+        // Number of neurons per layer
+        {25, 25},
+        // Activation functions
+        {{iganet::activation::sigmoid},
+            {iganet::activation::sigmoid},
+            {iganet::activation::none}},
+        // Number of B-spline coefficients of the geometry
+        std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)),
+        // Number of B-spline coefficients of the variable
+        std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS))
+    );
 
     if (RUN_REF_SIM) {
         gsMatrix<double> gsRefCtrlPts;
@@ -1199,11 +1205,11 @@ int main() {
             // original control points G+Smo
             gsRefOriginalCtrlPts_j.push_back({gsRefCtrlPts(i, 0), gsRefCtrlPts(i, 1)});
         }
-        net.appendToJsonFile("gsRefCtrlPts", displacedGsRefCtrlPts_j);
-        net.appendToJsonFile("gsRefDegree", DEGREE_REF);
-        net.appendToJsonFile("gsRefStresses", gsRefStresses_j);
-        net.appendToJsonFile("gsRefDisplacements", gsRefDisplacements_j);
-        net.appendToJsonFile("gsRefOriginalCtrlPts", gsRefOriginalCtrlPts_j);
+        net.appendToJsonFile("gsRef_CtrlPts", displacedGsRefCtrlPts_j);
+        net.appendToJsonFile("gsRef_Degree", DEGREE_REF);
+        net.appendToJsonFile("gsRef_VmStresses", gsRefStresses_j);
+        net.appendToJsonFile("gsRef_Displacements", gsRefDisplacements_j);
+        net.appendToJsonFile("gsRef_OriginalCtrlPts", gsRefOriginalCtrlPts_j);
     }
 
     // imposing body force
@@ -1217,7 +1223,7 @@ int main() {
     for (int i = 0; i < NR_CTRL_PTS; ++i) {
         ctrlPtsCoeffs_j.push_back({ctrlPtsCoeffs[i].item<double>()});
     }
-    net.appendToJsonFile("ctrlPtsCoeffs", ctrlPtsCoeffs_j);
+    net.appendToJsonFile("net_ctrlPtsCoeffs", ctrlPtsCoeffs_j);
 
     // run through all DIRI_SIDES
     for (const auto& side : DIRI_SIDES) {
@@ -1389,12 +1395,13 @@ int main() {
     }
 
     // write data to the json file
-    net.appendToJsonFile("gsCtrlPts", displacedGsCtrlPts_j);
-    net.appendToJsonFile("netCtrlPts", displacedNetCtrlPts_j);
-    net.appendToJsonFile("gsStresses", gsStresses_j);
-    net.appendToJsonFile("gsDisplacements", gsDisplacements_j);
-    net.appendToJsonFile("degree", DEGREE);
-    net.appendToJsonFile("gsOriginalCtrlPts", gsOriginalCtrlPts_j);
+    net.appendToJsonFile("gs_CtrlPts", displacedGsCtrlPts_j);
+    net.appendToJsonFile("net_CtrlPts", displacedNetCtrlPts_j);
+    net.appendToJsonFile("gs_VmStresses", gsStresses_j);
+    net.appendToJsonFile("gs_Displacements", gsDisplacements_j);
+    net.appendToJsonFile("net_Degree", DEGREE);
+    net.appendToJsonFile("gs_Degree", DEGREE);
+    net.appendToJsonFile("gs_OriginalCtrlPts", gsOriginalCtrlPts_j);
     
     iganet::finalize();
     return 0;

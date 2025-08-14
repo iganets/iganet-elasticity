@@ -16,8 +16,8 @@ using DispFunc = std::function<std::array<double,1>(const std::array<double,1>&)
 // Therefore this setup works well only for no specified tractions and no body forces.
 // If you want to integrate those, the loss function for energy minimization needs adaptation.
 template <typename Optimizer, typename GeometryMap, typename Variable>
-class neo_Hook : public iganet::IgANet<Optimizer, GeometryMap, Variable>,
-                          public iganet::IgANetCustomizable<GeometryMap, Variable> {
+class neo_Hook: public iganet::IgANet<Optimizer, GeometryMap, Variable>,
+                public iganet::IgANetCustomizable<GeometryMap, Variable> {
 
 private:
   using Base = iganet::IgANet<Optimizer, GeometryMap, Variable>;
@@ -34,7 +34,7 @@ private:
   typename Customizable::variable_interior_knot_indices_type var_knot_indices_;
   typename Customizable::variable_interior_coeff_indices_type var_coeff_indices_;
 
-  typename Customizable::variable_interior_knot_indices_type var_knot_indices_tf_;
+  typename Customizable::variable_interior_knot_indices_type var_knot_indices_tf_;      // 'neu'
   typename Customizable::variable_interior_coeff_indices_type var_coeff_indices_tf_;
 
   typename Customizable::variable_interior_knot_indices_type var_knot_indices_interior_;
@@ -46,7 +46,7 @@ private:
   typename Customizable::geometryMap_interior_knot_indices_type G_knot_indices_;
   typename Customizable::geometryMap_interior_coeff_indices_type G_coeff_indices_;
 
-  typename Customizable::geometryMap_interior_knot_indices_type G_knot_indices_tf_;
+  typename Customizable::geometryMap_interior_knot_indices_type G_knot_indices_tf_;     // neu'
   typename Customizable::geometryMap_interior_coeff_indices_type G_coeff_indices_tf_;
 
   typename Customizable::geometryMap_interior_knot_indices_type G_knot_indices_interior_;
@@ -178,7 +178,7 @@ public:
     }
   }
 
-  /// @brief helper function to calculate the Greville abscissae
+  /// @brief helper function to calculate the Greville abscissae ; and geom?
   static std::vector<double> computeGrevilleAbscissae(const gsKnotVector<double>& knotVector, int degree, int numCtrlPts) {
       std::vector<double> greville(numCtrlPts, 0.0);
       
@@ -215,7 +215,7 @@ public:
       // WARNING, only works for equal number of control points in x and y direction
       nrCollPts_ = static_cast<int>(std::sqrt(std::get<0>(collPts_)[0].size(0)));
 
-    // WARNING! Neumann Loss is hardcoded right now for top and bottom boundary
+     // WARNING! Neumann Loss is hardcoded right now for top and bottom boundary
       std::vector<torch::Tensor> tractionCollPtsX;
       std::vector<torch::Tensor> tractionCollPtsY;
       at::Tensor collPts_temp = std::get<0>(collPts_.second)[0];
@@ -262,17 +262,17 @@ public:
           Base::G_.template find_coeff_indices<iganet::functionspace::interior>(
               G_knot_indices_interior_);
 
-    var_knot_indices_tf_ =
+     var_knot_indices_tf_ =
         Base::f_.template find_knot_indices<iganet::functionspace::interior>(
         tractionCollPts_);
-    var_coeff_indices_tf_ =
+     var_coeff_indices_tf_ =
         Base::f_.template find_coeff_indices<iganet::functionspace::interior>(
         var_knot_indices_tf_);
-    G_knot_indices_tf_ =
+     G_knot_indices_tf_ =
         Base::G_.template find_knot_indices<iganet::functionspace::interior>(
             tractionCollPts_);
-    G_coeff_indices_tf_ =
-    Base::G_.template find_coeff_indices<iganet::functionspace::interior>(
+     G_coeff_indices_tf_ =
+        Base::G_.template find_coeff_indices<iganet::functionspace::interior>(
         G_knot_indices_tf_);
 
       return true;
@@ -301,8 +301,10 @@ public:
   
     // create command line output variable for all the different losses
     std::ostringstream singleLossOutput;
+
+
         
-    // first we minimize strain energy, after 20 epochs we change to minimizing divergence according to pde
+    // first we minimize strain energy, after 2 epochs we change to minimizing divergence according to pde
     if (epoch >= 2) {
 
         // Elasticity Loss
@@ -424,7 +426,7 @@ public:
         totalLoss += torch::mse_loss(P22, torch::zeros_like(P22));
 
     } else {
-        // energy minimization first
+        // senergy minimization first
         // calculate the jacobian of the displacements (u) at the collocation points
         auto jacobian = Base::u_.ijac(Base::G_, collPts_.first, 
             var_knot_indices_, var_coeff_indices_,
@@ -524,7 +526,7 @@ int main(int argc, char* argv[]) {
   double nodes_factor = 1.0;
   std::string json_path_temp = "/home/chg/Programming/PythonNet_IGA/Network_V1/NeuralNet/";
 
-  gsCmdLine cmd("Square being stretched with nonlinear elasticity solver.");
+  gsCmdLine cmd("Square being stretched with nonlinear elasticity solver.");        // @ gismo\src\gslO\gsCmdLine.cpp
   cmd.addInt("n","numbercontrolpoints","number control points",NR_CTRL_PTS_temp);
   cmd.addReal("f","nodes_factor","nodes factor",nodes_factor);
   cmd.addString("p","pathname", "name of output path", json_path_temp);
@@ -538,8 +540,8 @@ int main(int argc, char* argv[]) {
 
   // solver options
   auto solver_options = torch::optim::LBFGSOptions(1.0).
-                                        max_iter(150).
-                                        max_eval(100).
+                                        max_iter(50).
+                                        max_eval(75).
                                         history_size(200).
                                         tolerance_grad(1e-12).
                                         tolerance_change(1e-12).
