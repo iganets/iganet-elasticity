@@ -174,6 +174,45 @@ public:
       return greville;
   }
 
+    //mat Param func
+    double EMat1 = 210;
+    double nuMat1 = 0.27;
+    double EMat2 = 5;
+    double nuMat2 = 0.49;
+
+    std::pair<double, double> FuncMat(double valX, double valY) {       
+        if (valX >= 0.5) {      //&& valY >= 0.5
+            return {EMat2, nuMat2};
+        } else {
+            return {EMat1, nuMat1};
+        }
+    }
+    // Funcmi = @(valX, valY) FuncE(valX, valY) /(2*(1 + FuncNu(valX, valY)));
+    // Funclambda = @(valX, valY) FuncE(valX, valY) *FuncNu(valX, valY)/((1 + FuncNu(valX, valY))*(1 - 2*FuncNu(valX, valY)));
+    double FuncLambda(double valX, double valY) {
+        auto mat = FuncMat(valX, valY);
+        double E_temp = mat.first;
+        double nu_temp = mat.second;
+
+        double num =  (E_temp * nu_temp);
+        double denom = (1 + nu_temp) * (1 - 2 * nu_temp);
+
+        double lambda_temp = num /denom;
+        return lambda_temp;
+    } 
+
+    double FuncMu(double valX, double valY) {
+        auto mat = FuncMat(valX, valY);
+        double E_temp = mat.first;
+        double nu_temp = mat.second;
+
+        double num =  E_temp;
+        double denom = 2 * (1 + nu_temp);
+        
+        double mu_temp = num /denom;
+        return mu_temp;
+    } // just for reference: lambda_ mu_ first!
+
   /// @brief GISMO workflow
   static std::tuple<gsMatrix<double>, gsMatrix<double>, gsMatrix<double>> RunGismoSimulation(
         int64_t NR_CTRL_PTS, int DEGREE, double YOUNG_MODULUS, double POISSON_RATIO,
@@ -636,23 +675,26 @@ public:
 
             for (int i = 0; i < n_vals; ++i) {
                 int idx = pointCtr + i;     //11 oder 12 it. 0 bis 12?
-                
+
+                double x_temp = tractionCollPts[0][i].item<double>();
+                double y_temp = tractionCollPts[1][i].item<double>();
+
                 switch (side) {
                     case 1:
-                        tractionValuesX[idx] =  - lambda_ * (ux_x[idx] + uy_y[idx]) - 2 * mu_ * ux_x[idx];
-                        tractionValuesY[idx] =  - mu_ * (uy_x[idx] + ux_y[idx]);
+                        tractionValuesX[idx] =  - FuncLambda(x_temp, y_temp) * (ux_x[idx] + uy_y[idx]) - 2 * FuncMu(x_temp, y_temp) * ux_x[idx];
+                        tractionValuesY[idx] =  - FuncMu(x_temp, y_temp) * (uy_x[idx] + ux_y[idx]);
                         break;
                     case 2:
-                        tractionValuesX[idx] = lambda_ * (ux_x[idx] + uy_y[idx]) + 2 * mu_ * ux_x[idx];
-                        tractionValuesY[idx] = mu_ * (uy_x[idx] + ux_y[idx]);
+                        tractionValuesX[idx] = FuncLambda(x_temp, y_temp) * (ux_x[idx] + uy_y[idx]) + 2 * FuncMu(x_temp, y_temp) * ux_x[idx];
+                        tractionValuesY[idx] = FuncMu(x_temp, y_temp) * (uy_x[idx] + ux_y[idx]);
                         break;
                     case 3: 
-                        tractionValuesX[idx] =  - mu_ * (uy_x[idx] + ux_y[idx]);
-                        tractionValuesY[idx] =  - lambda_ * (ux_x[idx] + uy_y[idx]) - 2 * mu_ * uy_y[idx];
+                        tractionValuesX[idx] =  - FuncMu(x_temp, y_temp) * (uy_x[idx] + ux_y[idx]);
+                        tractionValuesY[idx] =  - FuncLambda(x_temp, y_temp) * (ux_x[idx] + uy_y[idx]) - 2 * FuncMu(x_temp, y_temp) * uy_y[idx];
                         break;
                     case 4:
-                        tractionValuesX[idx] = mu_ * (uy_x[idx] + ux_y[idx]);
-                        tractionValuesY[idx] = lambda_ * (ux_x[idx] + uy_y[idx]) + 2 * mu_ * uy_y[idx];
+                        tractionValuesX[idx] = FuncMu(x_temp, y_temp) * (uy_x[idx] + ux_y[idx]);
+                        tractionValuesY[idx] = FuncLambda(x_temp, y_temp) * (ux_x[idx] + uy_y[idx]) + 2 * FuncMu(x_temp, y_temp) * uy_y[idx];
                         break;
                     default:
                         std::cerr << "Error: invalid side = " << side << std::endl;
@@ -725,15 +767,19 @@ public:
     torch::Tensor divStressY = torch::zeros({hessianColl(0,0,1).size(0)});
 
     // calculation of the divergence of the stress tensor, this is what we're trying to minimize
-    for (int i = 0; i < hessianColl(0,0,0).size(0); ++i) {
+    for (int i = 0; i < hessianColl(0,0,0).size(0); ++i) {      // 36 it
+        at::Tensor tx = std::get<0>(interiorCollPts_.first)[i];   // Tensor
+        double x_temp = tx.item<double>();  
+        at::Tensor ty = std::get<1>(interiorCollPts_.first)[i];   // Tensor
+        double y_temp = ty.item<double>();  
 
         // x-direction
-        divStressX[i] = (lambda_ + 2 * mu_) * ux_xx[i] + 
-                        mu_ * ux_yy[i] + (lambda_ + mu_) * uy_xy[i];
+        divStressX[i] = (FuncLambda(x_temp, y_temp) + 2 * FuncMu(x_temp, y_temp)) * ux_xx[i] + 
+                        FuncMu(x_temp, y_temp) * ux_yy[i] + (FuncLambda(x_temp, y_temp) + FuncMu(x_temp, y_temp)) * uy_xy[i];
 
         // y-direction
-        divStressY[i] = mu_ * uy_xx[i] + (lambda_ + 2 * mu_) * uy_yy[i] + 
-                        (lambda_ + mu_) * ux_xy[i];
+        divStressY[i] = FuncMu(x_temp, y_temp) * uy_xx[i] + (FuncLambda(x_temp, y_temp) + 2 * FuncMu(x_temp, y_temp)) * uy_yy[i] + 
+                        (FuncLambda(x_temp, y_temp) + FuncMu(x_temp, y_temp)) * ux_xy[i];
         
     }
     
@@ -962,21 +1008,27 @@ public:
         nlohmann::json netPoisson_j = nlohmann::json::array();
 
         // calculate the stress tensor
-        for (int i = 0; i < jacobian[0]->size(0); ++i) {
+        for (int i = 0; i < jacobian[0]->size(0); ++i) {        // 64 it
+
+            at::Tensor tx = std::get<0>(collPts_.first)[i];
+            double x_temp = tx.item<double>();  
+            at::Tensor ty = std::get<1>(collPts_.first)[i];
+            double y_temp = ty.item<double>();  
+
             // calculate the stress values for all collocation points
-            sigma_xx[i] = lambda_ * (ux_x[i] + uy_y[i]) + 2 * mu_ * ux_x[i];
-            sigma_xy[i] = mu_ * (uy_x[i] + ux_y[i]);
-            sigma_yy[i] = lambda_ * (ux_x[i] + uy_y[i]) + 2 * mu_ * uy_y[i];
+            sigma_xx[i] = FuncLambda(x_temp, y_temp) * (ux_x[i] + uy_y[i]) + 2 * FuncMu(x_temp, y_temp) * ux_x[i];
+            sigma_xy[i] = FuncMu(x_temp, y_temp) * (uy_x[i] + ux_y[i]);
+            sigma_yy[i] = FuncLambda(x_temp, y_temp) * (ux_x[i] + uy_y[i]) + 2 * FuncMu(x_temp, y_temp) * uy_y[i];
             
             // calculate von mises stress at the collocation points
             sigma_vm[i] = sqrt(sigma_xx[i] * sigma_xx[i] + sigma_yy[i] * sigma_yy[i] 
                              - sigma_xx[i] * sigma_yy[i] + sigma_xy[i] * sigma_xy[i] * 3);
             
             // calculate the strains at the collocation points
-            epsilon_xx[i] = (lambda_ + mu_) / (mu_ * (3 * lambda_ + 2 * mu_)) * 
-                (sigma_xx[i] - lambda_ / (2 * (lambda_ + mu_)) * sigma_yy[i]);
-            epsilon_yy[i] = (lambda_ + mu_) / (mu_ * (3 * lambda_ + 2 * mu_)) * 
-                (sigma_yy[i] - lambda_ / (2 * (lambda_ + mu_)) * sigma_xx[i]);
+            epsilon_xx[i] = (FuncLambda(x_temp, y_temp) + FuncMu(x_temp, y_temp)) / (FuncMu(x_temp, y_temp) * (3 * FuncLambda(x_temp, y_temp) + 2 * FuncMu(x_temp, y_temp))) * 
+                (sigma_xx[i] - FuncLambda(x_temp, y_temp) / (2 * (FuncLambda(x_temp, y_temp) + FuncMu(x_temp, y_temp))) * sigma_yy[i]);
+            epsilon_yy[i] = (FuncLambda(x_temp, y_temp) + FuncMu(x_temp, y_temp)) / (FuncMu(x_temp, y_temp) * (3 * FuncLambda(x_temp, y_temp) + 2 * FuncMu(x_temp, y_temp))) * 
+                (sigma_yy[i] - FuncLambda(x_temp, y_temp) / (2 * (FuncLambda(x_temp, y_temp) + FuncMu(x_temp, y_temp))) * sigma_xx[i]);
 
             // only valid for load in x-direction
             poisson_re[i] = - epsilon_yy[i] / epsilon_xx[i];
