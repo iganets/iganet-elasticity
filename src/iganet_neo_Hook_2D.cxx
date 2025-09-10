@@ -85,9 +85,9 @@ public:
              std::forward<Args>(args)...),
         lambda_(lambda), mu_(mu), MAX_EPOCH_(MAX_EPOCH), 
         MIN_LOSS_(MIN_LOSS), JSON_PATH(json_path), SOLVER_OPTS(solver_opts), DIRI_SIDES_(std::move(DIRI_SIDES)), 
-        ref_(iganet::utils::to_array(16_i64, 7_i64)) {
+        ref_(iganet::utils::to_array(6_i64, 4_i64)) {
             this->initialize_dirichlet_boundaries();
-        }
+        } //16_i64, 7_i64
 
   /// @brief Returns a constant reference to the collocation points
   auto const &collPts() const { return collPts_; }
@@ -217,12 +217,12 @@ public:
 
       // Get the collocation points on all boundaries
       auto &collPts_boundary = collPts_.second;
-      // Extract left and right side, indices 2 and 3 (for hinge geometry they are the same)
+      // Extract left and right side, indices 2 and 3 (for hinge geometry they are the same), get rid of corner points in the process
       auto &left = std::get<2>(collPts_boundary);
       auto &right = std::get<3>(collPts_boundary);
       slice_left = left[0].slice(0, 1, -1);
       slice_right = right[0].slice(0, 1, -1);
-      // Transfer those collocation points to new vectors, get rid of corner points in the process
+      // Transfer those collocation points to new vectors
       std::vector<torch::Tensor> tractionCollPtsX;
       std::vector<torch::Tensor> tractionCollPtsY;
       tractionCollPtsX.push_back(torch::zeros({slice_left.size(0)}));
@@ -298,13 +298,14 @@ public:
     // pre-allocation of the loss values
     torch::Tensor totalLoss; 
     torch::Tensor elastLoss;
+    torch::Tensor neumannLoss;
     std::optional<torch::Tensor> bcLoss;
   
     // create command line output variable for all the different losses
     std::ostringstream singleLossOutput;
         
     // first we minimize strain energy, after 2 epochs we change to minimizing divergence according to pde
-    if (epoch >= 2) {
+    if (epoch >= -1) {
 
         // Elasticity Loss
 
@@ -366,7 +367,7 @@ public:
 
         // calculation of the loss function for double-sided constraint solid
         // div(sigma) + f = 0 --> div(sigma) = -f
-        elastLoss = torch::mse_loss(divP, bodyForce);
+        elastLoss = torch::mse_loss(divP, torch::zeros_like(divP));
         
         // add the elasticity loss to the total loss
         totalLoss = elastLoss;
@@ -421,10 +422,10 @@ public:
         auto P21 = mu_ * u2_x_tf - A_tf * u1_y_tf;
         auto P22 = mu_ * (1 + u2_y_tf) + A_tf * (1 + u1_x_tf);
 
-        // Normal Vector at Neumann boundary: 1 - down, 2 - up, 3 - right, 4 - left
-        auto& bdr_left = Base::G_.boundary().template side<4>();
+        // Normal Vector at Neumann boundary: 1 - down, 2 - up, 3 - left, 4 - right
+        auto& bdr_left = Base::G_.boundary().template side<3>();
         auto normal_left = bdr_left.nv(slice_left);
-        auto& bdr_right  = Base::G_.boundary().template side<3>();
+        auto& bdr_right  = Base::G_.boundary().template side<4>();
         auto normal_right = bdr_right.nv(slice_right);
 
         // Extract components of normal vectors
@@ -434,8 +435,8 @@ public:
         auto nr_y = normal_right(0, 1);
 
         // Concatenate normals of left and right side
-        auto normal_x = torch::cat({nr_x, nl_x}, 0);
-        auto normal_y = torch::cat({nr_y, nl_y}, 0);
+        auto normal_x = torch::cat({nl_x, nr_x}, 0);
+        auto normal_y = torch::cat({nl_y, nr_y}, 0);
 
         // Normalize the normal vectors
         auto length = torch::sqrt(normal_x.pow(2) + normal_y.pow(2));
@@ -450,14 +451,20 @@ public:
         auto traction_y = P21 * normal_x + P22 * normal_y;
         auto traction = torch::stack({traction_x, traction_y}, 1);
 
-        totalLoss += torch::mse_loss(traction, torch::zeros_like(traction)) * 1e7;
+        neumannLoss = torch::mse_loss(traction, torch::zeros_like(traction)) * 1e4;
+
+        singleLossOutput << " + NL " << std::setw(11) << neumannLoss.item<double>() / 1e4 
+        << " * 1e2" ;
+
+
+        totalLoss += neumannLoss;
 
     } else {
         // energy minimization first
         // calculate the jacobian of the displacements (u) at the collocation points
-        auto jacobian = Base::u_.ijac(Base::G_, collPts_.first, 
-            var_knot_indices_, var_coeff_indices_,
-            G_knot_indices_, G_coeff_indices_);
+        auto jacobian = Base::u_.ijac(Base::G_, interiorCollPts_.first, 
+            var_knot_indices_interior_, var_coeff_indices_interior_,
+            G_knot_indices_interior_, G_coeff_indices_interior_);
         
         auto& u1_x = jacobian(0);
         auto& u1_y = jacobian(1);
@@ -541,18 +548,19 @@ int main(int argc, char* argv[]) {
   double POISSON_RATIO = 0.3;
 
   // simulation parameters
-  int MAX_EPOCH = 100;
+  int MAX_EPOCH = 20;
   double MIN_LOSS = 1e-9;
+  double REL_LOSS = 1e-2;
   bool SUPERVISED_LEARNING = false;
   bool RUN_REF_SIM = false;
 
   // spline parameters
   int64_t NR_CTRL_PTS;  // in each direction 
-  int64_t NR_CTRL_PTS_u = 16;
-  int64_t NR_CTRL_PTS_v = 7;
+  int64_t NR_CTRL_PTS_u = 6; //16
+  int64_t NR_CTRL_PTS_v = 4; // 7
   int NR_CTRL_PTS_temp = 5;
   constexpr int DEGREE = 3;
-  double nodes_factor = 3.0;
+  double nodes_factor = 1.0;
   std::string json_path_temp = "/home/chg/Programming/IGN_neoHook/03_iganet_solution/";
 
   gsCmdLine cmd("Square being stretched with nonlinear elasticity solver.");
@@ -581,7 +589,7 @@ int main(int argc, char* argv[]) {
   DispFunc zeroDisp = [](auto const& xi) {return std::array<double,1>{ 0.0 };};
   DispFunc Disp2 = [](auto const& xi) {
     double s = xi[0];
-    return std::array<double,1>{2.0};};
+    return std::array<double,1>{1.0};};
 
 
   std::vector<std::tuple<int,DispFunc,DispFunc>> DIRI_SIDES = {
@@ -602,7 +610,7 @@ int main(int argc, char* argv[]) {
   using variable_t = iganet::S<iganet::UniformBSpline<real_t, 2, DEGREE, DEGREE>>;
   using neo_Hook_t = neo_Hook<optimizer_t, geometry_t, variable_t>;
   
-  auto number_nodes = std::max(1, static_cast<int>(std::round(16*7*2*nodes_factor)));
+  auto number_nodes = std::max(1, static_cast<int>(std::round(6*4*2*nodes_factor)));
 
     neo_Hook_t
       net(// simulation parameters
@@ -619,7 +627,7 @@ int main(int argc, char* argv[]) {
 
   // Load XML file
   pugi::xml_document xml;
-  xml.load_file(IGANET_DATA_DIR "surfaces/2d/hinge.xml");
+  xml.load_file(IGANET_DATA_DIR "surfaces/2d/simple.xml");
   net.G().from_xml(xml);
   net.G().boundary().from_full_tensor(net.G().as_tensor());
   //if (! xml.load_file(IGANET_DATA_DIR "surfaces/2d/hinge.xml") )
@@ -640,6 +648,7 @@ int main(int argc, char* argv[]) {
 
   // Set tolerance for the loss functions
   net.options().min_loss(MIN_LOSS);
+  net.options().rel_loss(REL_LOSS);
 
   // Start time measurement
   auto t1 = std::chrono::high_resolution_clock::now();
