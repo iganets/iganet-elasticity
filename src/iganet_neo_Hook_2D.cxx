@@ -85,7 +85,7 @@ public:
              std::forward<Args>(args)...),
         lambda_(lambda), mu_(mu), MAX_EPOCH_(MAX_EPOCH), 
         MIN_LOSS_(MIN_LOSS), JSON_PATH(json_path), SOLVER_OPTS(solver_opts), DIRI_SIDES_(std::move(DIRI_SIDES)), 
-        ref_(iganet::utils::to_array(6_i64, 4_i64)) {
+        ref_(iganet::utils::to_array(16_i64, 7_i64)) {
             this->initialize_dirichlet_boundaries();
         } //16_i64, 7_i64
 
@@ -212,8 +212,8 @@ public:
 
       Base::inputs(epoch);
 
-      collPts_ = Base::variable_collPts(iganet::collPts::greville);
-      interiorCollPts_ = Base::variable_collPts(iganet::collPts::greville_interior);
+      collPts_ = Base::variable_collPts(iganet::collPts::greville_ref2);
+      interiorCollPts_ = Base::variable_collPts(iganet::collPts::greville_interior_ref2);
 
       // Get the collocation points on all boundaries
       auto &collPts_boundary = collPts_.second;
@@ -278,9 +278,9 @@ public:
 
       return true;
     } 
-    else if (epoch == 2) {
+    else if (epoch == 5) {
         this->optimizerReset(SOLVER_OPTS);
-        //        this->set_lbfgs_options(SOLVER_OPTS);
+                //this->set_lbfgs_options(SOLVER_OPTS);
     }
     else if (epoch == MAX_EPOCH_-1) {
         // write geometry and solution spline data to file
@@ -304,9 +304,9 @@ public:
     // create command line output variable for all the different losses
     std::ostringstream singleLossOutput;
         
+    //this->optimizerOptionsReset(SOLVER_OPTS);
     // first we minimize strain energy, after 2 epochs we change to minimizing divergence according to pde
-    if (epoch >= -1) {
-
+    if (epoch >= 5) {
         // Elasticity Loss
 
         // calculate the jacobian of the displacements (u) at the interior collocation points
@@ -451,10 +451,10 @@ public:
         auto traction_y = P21 * normal_x + P22 * normal_y;
         auto traction = torch::stack({traction_x, traction_y}, 1);
 
-        neumannLoss = torch::mse_loss(traction, torch::zeros_like(traction)) * 1e4;
+        neumannLoss = torch::mse_loss(traction, torch::zeros_like(traction)) * 1e0;
 
-        singleLossOutput << " + NL " << std::setw(11) << neumannLoss.item<double>() / 1e4 
-        << " * 1e2" ;
+        singleLossOutput << " + NL " << std::setw(11) << neumannLoss.item<double>() / 1e0 
+        << " * 1e0" ;
 
 
         totalLoss += neumannLoss;
@@ -544,7 +544,7 @@ int main(int argc, char* argv[]) {
   // ------- USER INPUTS ------- //
 
   // material parameters
-  double YOUNG_MODULUS = 10;
+  double YOUNG_MODULUS = 1;
   double POISSON_RATIO = 0.3;
 
   // simulation parameters
@@ -556,8 +556,8 @@ int main(int argc, char* argv[]) {
 
   // spline parameters
   int64_t NR_CTRL_PTS;  // in each direction 
-  int64_t NR_CTRL_PTS_u = 6; //16
-  int64_t NR_CTRL_PTS_v = 4; // 7
+  int64_t NR_CTRL_PTS_u = 16; //16 6
+  int64_t NR_CTRL_PTS_v = 7; // 7 4
   int NR_CTRL_PTS_temp = 5;
   constexpr int DEGREE = 3;
   double nodes_factor = 1.0;
@@ -589,7 +589,7 @@ int main(int argc, char* argv[]) {
   DispFunc zeroDisp = [](auto const& xi) {return std::array<double,1>{ 0.0 };};
   DispFunc Disp2 = [](auto const& xi) {
     double s = xi[0];
-    return std::array<double,1>{1.0};};
+    return std::array<double,1>{0.2};};
 
 
   std::vector<std::tuple<int,DispFunc,DispFunc>> DIRI_SIDES = {
@@ -610,15 +610,17 @@ int main(int argc, char* argv[]) {
   using variable_t = iganet::S<iganet::UniformBSpline<real_t, 2, DEGREE, DEGREE>>;
   using neo_Hook_t = neo_Hook<optimizer_t, geometry_t, variable_t>;
   
-  auto number_nodes = std::max(1, static_cast<int>(std::round(6*4*2*nodes_factor)));
+  auto number_nodes = std::max(1, static_cast<int>(std::round(16*7*2*nodes_factor)));
 
     neo_Hook_t
       net(// simulation parameters
           lambda, mu, MAX_EPOCH, MIN_LOSS, json_path, solver_options, std::move(DIRI_SIDES),
           // Number of neurons per layer
-          {number_nodes},
+          {number_nodes, number_nodes, number_nodes},
           // Activation functions
           {{iganet::activation::tanh},
+           {iganet::activation::tanh},
+           {iganet::activation::tanh},
            {iganet::activation::none}},
           // Number of B-spline coefficients of the geometry
           std::tuple(iganet::utils::to_array(NR_CTRL_PTS_u, NR_CTRL_PTS_v)),
@@ -627,7 +629,7 @@ int main(int argc, char* argv[]) {
 
   // Load XML file
   pugi::xml_document xml;
-  xml.load_file(IGANET_DATA_DIR "surfaces/2d/simple.xml");
+  xml.load_file(IGANET_DATA_DIR "surfaces/2d/hinge.xml");
   net.G().from_xml(xml);
   net.G().boundary().from_full_tensor(net.G().as_tensor());
   //if (! xml.load_file(IGANET_DATA_DIR "surfaces/2d/hinge.xml") )
