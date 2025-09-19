@@ -60,6 +60,7 @@ private:
   // material properties - lame's parameters
   double lambda_;
   double mu_;
+  double bc_update_ = 0.2;
 
   // simulation parameter
   double MAX_EPOCH_;
@@ -87,7 +88,7 @@ public:
         MIN_LOSS_(MIN_LOSS), JSON_PATH(json_path), SOLVER_OPTS(solver_opts), DIRI_SIDES_(std::move(DIRI_SIDES)), 
         ref_(iganet::utils::to_array(16_i64, 7_i64)) {
             this->initialize_dirichlet_boundaries();
-        } //16_i64, 7_i64
+        } //16_i64, 7_i64, 6, 4
 
   /// @brief Returns a constant reference to the collocation points
   auto const &collPts() const { return collPts_; }
@@ -101,11 +102,21 @@ public:
   /// @brief Returns a non-constant reference to the reference solution
   auto &ref() { return ref_; }
 
+  inline DispFunc scale_disp(DispFunc f, double s) {
+    return [f, x](auto const& xi) {
+        auto a = f(xi);
+        a[0] *= s;
+        return a;
+    }
+  };
+
   void initialize_dirichlet_boundaries() {
     // run through all DIRI_SIDES and register respective lambdas
     for (const auto& side : this->DIRI_SIDES_) {
         int sideNr = std::get<0>(side);
-        DispFunc xDispFun = std::get<1>(side);
+        //DispFunc xDispFun = scale_disp(std::get<1>(side), 1);
+        //DispFunc yDispFun = scale_disp(std::get<2>(side), 1);
+        DispFunc xDispFun =std::get<1>(side);
         DispFunc yDispFun = std::get<2>(side);
 
         switch (sideNr) {
@@ -137,6 +148,47 @@ public:
                 std::cerr << "Error: Invalid side number " << sideNr << std::endl;
         }
     }
+  }
+
+
+  void update_dirichlet_boundaries() {
+    std::cout << "\n Dirichlet updated with " << bc_update_ << "\n\n";
+    // run through all DIRI_SIDES and register respective lambdas
+    for (const auto& side : this->DIRI_SIDES_) {
+        int sideNr = std::get<0>(side);
+        DispFunc xDispFun = scale_disp(std::get<1>(side), bc_update_);
+        DispFunc yDispFun = scale_disp(std::get<2>(side), bc_update_);
+
+        switch (sideNr) {
+            case 1:
+                this->ref_.boundary().template side<1>().template transform<1>(
+                    xDispFun, std::array<iganet::short_t,1>{0});
+                this->ref_.boundary().template side<1>().template transform<1>(
+                    yDispFun, std::array<iganet::short_t,1>{1});
+                break;
+            case 2:
+                this->ref_.boundary().template side<2>().template transform<1>(
+                    xDispFun, std::array<iganet::short_t,1>{0});
+                this->ref_.boundary().template side<2>().template transform<1>(
+                    yDispFun, std::array<iganet::short_t,1>{1});
+                break;
+            case 3:
+                this->ref_.boundary().template side<3>().template transform<1>(
+                    xDispFun, std::array<iganet::short_t,1>{0});
+                this->ref_.boundary().template side<3>().template transform<1>(
+                    yDispFun, std::array<iganet::short_t,1>{1});
+                break;
+            case 4:
+                this->ref_.boundary().template side<4>().template transform<1>(
+                    xDispFun, std::array<iganet::short_t,1>{0});
+                this->ref_.boundary().template side<4>().template transform<1>(
+                    yDispFun, std::array<iganet::short_t,1>{1});
+                break;
+            default:
+                std::cerr << "Error: Invalid side number " << sideNr << std::endl;
+        }
+    }
+    bc_update_ += 0.1;
   }
   
   void appendToJsonFile(const std::string& key, const nlohmann::json& data) {
@@ -206,9 +258,14 @@ public:
     // print epoch number
     std::cout << "Epoch: " << epoch << std::endl;
 
+    //if (epoch % 5 == 0 && bc_update_ <= 1.0) {
+    //    this->update_dirichlet_boundaries();
+    //    this->optimizerReset(SOLVER_OPTS);
+    //}
+
     if (epoch == 0) {
 
-      write_result();
+      //write_result();
 
       // set the solver options
       this->optimizerOptionsReset(SOLVER_OPTS);
@@ -342,9 +399,10 @@ public:
         auto& u2_yy = hessianColl(1,1,1);
 
         double beta = 10.0;
+        double epsilon = 3e-3;
         // Divergence of first Kirchhoff stress tensor
         auto J = 1.0 + u1_x + u2_y + u1_x*u2_y - u1_y*u2_x;
-        auto sp_J = torch::nn::functional::softplus(J, torch::nn::functional::SoftplusFuncOptions()
+        auto sp_J = epsilon + torch::nn::functional::softplus(J-epsilon, torch::nn::functional::SoftplusFuncOptions()
             .beta(beta)
             .threshold(20.0));
         auto sig_J = torch::sigmoid(beta * J);
@@ -423,7 +481,7 @@ public:
 
         // Divergence of first Kirchhoff stress tensor
         auto J_tf = 1.0 + u1_x_tf + u2_y_tf + u1_x_tf*u2_y_tf - u1_y_tf*u2_x_tf;
-        auto sp_J_tf = torch::nn::functional::softplus(J_tf, torch::nn::functional::SoftplusFuncOptions()
+        auto sp_J_tf = epsilon + torch::nn::functional::softplus(J_tf-epsilon, torch::nn::functional::SoftplusFuncOptions()
             .beta(beta)
             .threshold(20.0));
         auto sig_J_tf = torch::sigmoid(beta * J_tf);
@@ -565,9 +623,9 @@ int main(int argc, char* argv[]) {
   double POISSON_RATIO = 0.3;
 
   // simulation parameters
-  int MAX_EPOCH = 20;
+  int MAX_EPOCH = 50;
   double MIN_LOSS = 1e-9;
-  double REL_LOSS = 1e-2;
+  double REL_LOSS = 0;
   bool SUPERVISED_LEARNING = false;
   bool RUN_REF_SIM = false;
 
@@ -627,7 +685,7 @@ int main(int argc, char* argv[]) {
   using variable_t = iganet::S<iganet::UniformBSpline<real_t, 2, DEGREE, DEGREE>>;
   using neo_Hook_t = neo_Hook<optimizer_t, geometry_t, variable_t>;
   
-  auto number_nodes = std::max(1, static_cast<int>(std::round(16*7*2*nodes_factor)));
+  auto number_nodes = std::max(1, static_cast<int>(std::round(16*7*2*nodes_factor))); // 16 7
 
     neo_Hook_t
       net(// simulation parameters
@@ -644,7 +702,7 @@ int main(int argc, char* argv[]) {
 
   // Load XML file
   pugi::xml_document xml;
-  xml.load_file(IGANET_DATA_DIR "surfaces/2d/simple.xml");
+  xml.load_file(IGANET_DATA_DIR "surfaces/2d/hinge.xml");
   pugi::xml_document init;
   init.load_file(IGANET_DATA_DIR "surfaces/2d/displacement_gismo.xml");
   net.G().from_xml(xml);
