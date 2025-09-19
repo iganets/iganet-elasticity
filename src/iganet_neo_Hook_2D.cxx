@@ -207,6 +207,9 @@ public:
     std::cout << "Epoch: " << epoch << std::endl;
 
     if (epoch == 0) {
+
+      write_result();
+
       // set the solver options
       this->optimizerOptionsReset(SOLVER_OPTS);
 
@@ -278,7 +281,7 @@ public:
 
       return true;
     } 
-    else if (epoch == 5) {
+    else if (epoch == 2) {
         this->optimizerReset(SOLVER_OPTS);
                 //this->set_lbfgs_options(SOLVER_OPTS);
     }
@@ -292,6 +295,9 @@ public:
   /// @brief Computes the loss function
   torch::Tensor loss(const torch::Tensor &outputs, int64_t epoch) override {
 
+    //auto geomu = Base::u_.to_json();
+    //iganet::Log(iganet::log::info) << geomu;
+    
     // create u_ from the training's outputs
     Base::u_.from_tensor(outputs);
 
@@ -306,7 +312,7 @@ public:
         
     //this->optimizerOptionsReset(SOLVER_OPTS);
     // first we minimize strain energy, after 2 epochs we change to minimizing divergence according to pde
-    if (epoch >= 5) {
+    if (epoch >= 2) {
         // Elasticity Loss
 
         // calculate the jacobian of the displacements (u) at the interior collocation points
@@ -338,14 +344,24 @@ public:
         double beta = 10.0;
         // Divergence of first Kirchhoff stress tensor
         auto J = 1.0 + u1_x + u2_y + u1_x*u2_y - u1_y*u2_x;
-        auto J_sp = torch::nn::functional::softplus(J, torch::nn::functional::SoftplusFuncOptions()
+        auto sp_J = torch::nn::functional::softplus(J, torch::nn::functional::SoftplusFuncOptions()
             .beta(beta)
             .threshold(20.0));
+        auto sig_J = torch::sigmoid(beta * J);
+        auto ln_sp_J = torch::log1p(sp_J - 1);
+        auto a = beta * sig_J * (1 - sig_J);
+        auto c = sig_J / sp_J;
         auto J_x = u1_xx + u2_yx + u1_xx*u2_y +u1_x*u2_yx - u1_yx*u2_x - u1_y*u2_xx;
         auto J_y = u1_xy + u2_yy + u1_xy*u2_y +u1_x*u2_yy - u1_yy*u2_x - u1_y*u2_xy;
-        auto A = (lambda_ * torch::log1p(J_sp - 1) - mu_) / J_sp;
-        auto A_x = (lambda_ + mu_ - lambda_*torch::log1p(J_sp - 1)) * J_x / (J_sp*J_sp);
-        auto A_y = (lambda_ + mu_ - lambda_*torch::log1p(J_sp - 1)) * J_y / (J_sp*J_sp);
+        auto ax = a * J_x;
+        auto ay = a * J_y;
+        auto bx = sig_J * J_x;
+        auto by = sig_J * J_y;
+        auto cx = c * J_x;
+        auto cy = c * J_y;
+        auto A = sig_J / sp_J * (lambda_ * ln_sp_J - mu_);
+        auto A_x = lambda_ * ((ax * ln_sp_J + sig_J * cx) * sp_J - sig_J * ln_sp_J * bx) / (sp_J * sp_J) - mu_ * (ax * sp_J - sig_J * bx) / (sp_J * sp_J);
+        auto A_y = lambda_ * ((ay * ln_sp_J + sig_J * cy) * sp_J - sig_J * ln_sp_J * by) / (sp_J * sp_J) - mu_ * (ay * sp_J - sig_J * by) / (sp_J * sp_J);
 
         // First derivatives of first Piola Kirchhoff stress tensor
         auto P11_x = mu_*u1_xx + A_x + A_x*u2_y + A*u2_yx;
@@ -407,14 +423,12 @@ public:
 
         // Divergence of first Kirchhoff stress tensor
         auto J_tf = 1.0 + u1_x_tf + u2_y_tf + u1_x_tf*u2_y_tf - u1_y_tf*u2_x_tf;
-        auto J_sp_tf = torch::nn::functional::softplus(J_tf, torch::nn::functional::SoftplusFuncOptions()
+        auto sp_J_tf = torch::nn::functional::softplus(J_tf, torch::nn::functional::SoftplusFuncOptions()
             .beta(beta)
             .threshold(20.0));
-        auto J_x_tf = u1_xx_tf + u2_yx_tf + u1_xx_tf*u2_y_tf +u1_x_tf*u2_yx_tf - u1_yx_tf*u2_x_tf - u1_y_tf*u2_xx_tf;
-        auto J_y_tf = u1_xy_tf + u2_yy_tf + u1_xy_tf*u2_y_tf +u1_x_tf*u2_yy_tf - u1_yy_tf*u2_x_tf - u1_y_tf*u2_xy_tf;
-        auto A_tf = (lambda_ * torch::log1p(J_sp_tf - 1) - mu_) / J_sp_tf;
-        auto A_x_tf = (lambda_ + mu_ - lambda_*torch::log1p(J_sp_tf - 1)) * J_x_tf / (J_sp_tf*J_sp_tf);
-        auto A_y_tf = (lambda_ + mu_ - lambda_*torch::log1p(J_sp_tf - 1)) * J_y_tf / (J_sp_tf*J_sp_tf);
+        auto sig_J_tf = torch::sigmoid(beta * J_tf);
+        auto ln_sp_J_tf = torch::log1p(sp_J_tf - 1);
+        auto A_tf = sig_J_tf / sp_J_tf * (lambda_ * ln_sp_J_tf - mu_);
 
         // Components of first Piola Kirchhoff stress tensor
         auto P11 = mu_ * (1 + u1_x_tf) + A_tf * (1 + u2_y_tf);
@@ -451,10 +465,10 @@ public:
         auto traction_y = P21 * normal_x + P22 * normal_y;
         auto traction = torch::stack({traction_x, traction_y}, 1);
 
-        neumannLoss = torch::mse_loss(traction, torch::zeros_like(traction)) * 1e0;
+        neumannLoss = torch::mse_loss(traction, torch::zeros_like(traction)) * 1e2;
 
-        singleLossOutput << " + NL " << std::setw(11) << neumannLoss.item<double>() / 1e0 
-        << " * 1e0" ;
+        singleLossOutput << " + NL " << std::setw(11) << neumannLoss.item<double>() / 1e2 
+        << " * 1e2" ;
 
 
         totalLoss += neumannLoss;
@@ -471,7 +485,7 @@ public:
         auto& u2_x = jacobian(2);
         auto& u2_y = jacobian(3);
 
-        double beta = 2.0;
+        double beta = 10.0;
         // Divergence of first Kirchhoff stress tensor
         auto J = 1.0 + u1_x + u2_y + u1_x*u2_y - u1_y*u2_x;
         auto J_sp = torch::nn::functional::softplus(J, torch::nn::functional::SoftplusFuncOptions()
@@ -528,6 +542,9 @@ public:
         totalLoss += *bcLoss;
         singleLossOutput << " + BL " << std::setw(11) << (*bcLoss).item<double>() / bcWeight 
                             << " * 1e" << static_cast<int>(std::log10(bcWeight));
+
+        //std::cin.get();
+        //write_result();
     }
 
     // print the loss values
@@ -578,10 +595,10 @@ int main(int argc, char* argv[]) {
   // solver options
   auto solver_options = torch::optim::LBFGSOptions(1.0).
                                         max_iter(150).
-                                        max_eval(100).
-                                        history_size(200).
-                                        tolerance_grad(1e-12).
-                                        tolerance_change(1e-12).
+                                        max_eval(1000).
+                                        history_size(250).
+                                        tolerance_grad(1e-16).
+                                        tolerance_change(1e-16).
                                         line_search_fn("strong_wolfe");
 
 
@@ -616,11 +633,9 @@ int main(int argc, char* argv[]) {
       net(// simulation parameters
           lambda, mu, MAX_EPOCH, MIN_LOSS, json_path, solver_options, std::move(DIRI_SIDES),
           // Number of neurons per layer
-          {number_nodes, number_nodes, number_nodes},
+          {number_nodes},
           // Activation functions
           {{iganet::activation::tanh},
-           {iganet::activation::tanh},
-           {iganet::activation::tanh},
            {iganet::activation::none}},
           // Number of B-spline coefficients of the geometry
           std::tuple(iganet::utils::to_array(NR_CTRL_PTS_u, NR_CTRL_PTS_v)),
@@ -629,14 +644,23 @@ int main(int argc, char* argv[]) {
 
   // Load XML file
   pugi::xml_document xml;
-  xml.load_file(IGANET_DATA_DIR "surfaces/2d/hinge.xml");
+  xml.load_file(IGANET_DATA_DIR "surfaces/2d/simple.xml");
+  pugi::xml_document init;
+  init.load_file(IGANET_DATA_DIR "surfaces/2d/displacement_gismo.xml");
   net.G().from_xml(xml);
   net.G().boundary().from_full_tensor(net.G().as_tensor());
+  //net.u().from_xml(init);
+  //net.u().boundary().from_full_tensor(net.u().as_tensor());
   //if (! xml.load_file(IGANET_DATA_DIR "surfaces/2d/hinge.xml") )
   //  std::cerr << "Failed to load hinge.xml\n";
 
   auto geomJ = net.G().to_json();
   iganet::Log(iganet::log::info) << geomJ;
+
+  std::cout << "\n\n";
+
+  //auto geomu = net.u().to_json();
+  //iganet::Log(iganet::log::info) << geomu;
 
   // imposing body force
   net.f().transform([=](const std::array<real_t, 2> xi) {
