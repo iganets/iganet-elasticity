@@ -6,38 +6,76 @@ using namespace iganet::literals;       // @ include\iganet.hpp
 using namespace gismo;
 
 /// @brief Specialization of the IgANet class for linear elasticity in 2D
-template <typename Optimizer, typename GeometryMap, typename Variable>
-class linear_elasticity : public iganet::IgANet<Optimizer, GeometryMap, Variable>,
-                          public iganet::IgANetCustomizable<GeometryMap, Variable> {
+template <typename Optimizer, typename Inputs, typename Outputs>
+class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
+                          public iganet::IgANetCustomizable2<Inputs, Outputs> {
 
     private:
-        using Base = iganet::IgANet<Optimizer, GeometryMap, Variable>;
+        using Base = iganet::IgANet2<Optimizer, Inputs, Outputs>;
 
-        typename Base::variable_collPts_type collPts_;
-        typename Base::variable_collPts_type interiorCollPts_;
+        Base::template collPts_t<0> collPts_;
+        Base::template collPts_t<0> interiorCollPts_;
 
         int nrCollPts_;
-        Variable ref_;
+        typename std::tuple_element_t<0, Outputs> ref_;
 
-        using Customizable = iganet::IgANetCustomizable<GeometryMap, Variable>;
+//         G_   = Base::template input<0>();
+//         f_   = Base::template input<1>();
+//         mat_ = Base::template input<2>();
+//         u_   = Base::template output<0>();'
 
-        typename Customizable::variable_interior_knot_indices_type var_knot_indices_;
-        typename Customizable::variable_interior_coeff_indices_type var_coeff_indices_;
+        using Customizable = iganet::IgANetCustomizable2<Inputs, Outputs>;
+        
+        // *** Declaring the types of knot/coeff indices. for various input/output quantities. ***
+        // --- G_ --- INPUT. geometry 
+        Customizable::template input_interior_knot_indices_t<0> G_knot_indices_;
+        Customizable::template input_interior_coeff_indices_t<0> G_coeff_indices_;
 
-        typename Customizable::variable_interior_knot_indices_type var_knot_indices_interior_;
-        typename Customizable::variable_interior_coeff_indices_type var_coeff_indices_interior_;
+        Customizable::template input_interior_knot_indices_t<0> G_knot_indices_interior_;
+        Customizable::template input_interior_coeff_indices_t<0> G_coeff_indices_interior_;
 
-        typename Customizable::variable_interior_knot_indices_type var_knot_indices_boundary_;
-        typename Customizable::variable_interior_coeff_indices_type var_coeff_indices_boundary_;
+        Customizable::template input_interior_knot_indices_t<0> G_knot_indices_boundary_;
+        Customizable::template input_interior_coeff_indices_t<0> G_coeff_indices_boundary_;
 
-        typename Customizable::geometryMap_interior_knot_indices_type G_knot_indices_;
-        typename Customizable::geometryMap_interior_coeff_indices_type G_coeff_indices_;
+        Customizable::template input_interior_knot_indices_t<0> G_knot_indices_tf_;
+        Customizable::template input_interior_coeff_indices_t<0> G_coeff_indices_tf_;
 
-        typename Customizable::geometryMap_interior_knot_indices_type G_knot_indices_interior_;
-        typename Customizable::geometryMap_interior_coeff_indices_type G_coeff_indices_interior_;
+        // --- f_ --- INPUT. RHS
+        Customizable::template input_interior_knot_indices_t<1> var_knot_indices_;
+        Customizable::template input_interior_coeff_indices_t<1> var_coeff_indices_;
 
-        typename Customizable::geometryMap_interior_knot_indices_type G_knot_indices_boundary_;
-        typename Customizable::geometryMap_interior_coeff_indices_type G_coeff_indices_boundary_;
+        Customizable::template input_interior_knot_indices_t<1> var_knot_indices_interior_;
+        Customizable::template input_interior_coeff_indices_t<1> var_coeff_indices_interior_;
+
+        Customizable::template input_interior_knot_indices_t<1> var_knot_indices_boundary_;
+        Customizable::template input_interior_coeff_indices_t<1> var_coeff_indices_boundary_;
+
+        // Customizable::template input_interior_knot_indices_t<1> var_knot_indices_tf_;
+        // Customizable::template input_interior_coeff_indices_t<1> var_coeff_indices_tf_;
+
+        // --- mat_ --- INPUT. material. (not in use yet)
+        Customizable::template input_interior_knot_indices_t<2> mat_knot_indices_;
+        Customizable::template input_interior_coeff_indices_t<2> mat_coeff_indices_;
+
+        Customizable::template input_interior_knot_indices_t<2> mat_knot_indices_interior_;
+        Customizable::template input_interior_coeff_indices_t<2> mat_coeff_indices_interior_;
+
+        Customizable::template input_interior_knot_indices_t<2> mat_knot_indices_boundary_;
+        Customizable::template input_interior_coeff_indices_t<2> mat_coeff_indices_boundary_;
+
+        // // --- u_ --- OUTPUT. solution
+        // Customizable::template output_interior_knot_indices_t<0> u_knot_indices_;
+        // Customizable::template output_interior_coeff_indices_t<0> u_coeff_indices_;
+
+        // Customizable::template output_interior_knot_indices_t<0> u_knot_indices_interior_;
+        // Customizable::template output_interior_coeff_indices_t<0> u_coeff_indices_interior_;
+
+        // Customizable::template output_interior_knot_indices_t<0> u_knot_indices_boundary_;
+        // Customizable::template output_interior_coeff_indices_t<0> u_coeff_indices_boundary_;
+
+        Customizable::template output_interior_knot_indices_t<0> u_knot_indices_tf_;
+        Customizable::template output_interior_coeff_indices_t<0> u_coeff_indices_tf_;
+
 
         // material properties - lame's parameters
         double lambda_;
@@ -341,8 +379,8 @@ class linear_elasticity : public iganet::IgANet<Optimizer, GeometryMap, Variable
             std::cout << "Epoch: " << epoch << std::endl;               // print epoch number
             if (epoch == 0) {
             Base::inputs(epoch);
-            collPts_ = Base::variable_collPts(iganet::collPts::greville);
-            interiorCollPts_ = Base::variable_collPts(iganet::collPts::greville_interior);
+            collPts_ = Base::template collPts<0>(iganet::collPts::greville);
+            interiorCollPts_ = Base::template collPts<0>(iganet::collPts::greville_interior);
             
             // WARNING, only works for equal number of control points in x and y direction
             nrCollPts_ = static_cast<int>(std::sqrt(std::get<0>(collPts_)[0].size(0)));
@@ -354,34 +392,48 @@ class linear_elasticity : public iganet::IgANet<Optimizer, GeometryMap, Variable
             appendToJsonFile("net_collPtsCoeffsRef1", collPtsCoeffs_j);
             appendToJsonFile("net_nrCollPtsRef1", {nrCollPts_});
             
-
-            var_knot_indices_ =
-                Base::f_.template find_knot_indices<iganet::functionspace::interior>(
-                    collPts_.first);
-            var_coeff_indices_ =
-                Base::f_.template find_coeff_indices<iganet::functionspace::interior>(
-                    var_knot_indices_);
-
-            var_knot_indices_interior_ =
-                Base::f_.template find_knot_indices<iganet::functionspace::interior>(
-                        interiorCollPts_.first);
-            var_coeff_indices_interior_ =
-                Base::f_.template find_coeff_indices<iganet::functionspace::interior>(
-                    var_knot_indices_interior_);
-
+            // --- G --- geom
             G_knot_indices_ =
-                Base::G_.template find_knot_indices<iganet::functionspace::interior>(
-                    collPts_.first);
+                Base::template input<0>().template find_knot_indices<iganet::functionspace::interior>(collPts_.first);
             G_coeff_indices_ =
-                Base::G_.template find_coeff_indices<iganet::functionspace::interior>(
-                    G_knot_indices_);
+                Base::template input<0>().template find_coeff_indices<iganet::functionspace::interior>(G_knot_indices_);
 
             G_knot_indices_interior_ = 
-                Base::G_.template find_knot_indices<iganet::functionspace::interior>(
-                    interiorCollPts_.first);
+                Base::template input<0>().template find_knot_indices<iganet::functionspace::interior>(interiorCollPts_.first);
             G_coeff_indices_interior_ =
-                Base::G_.template find_coeff_indices<iganet::functionspace::interior>(
-                    G_knot_indices_interior_);
+                Base::template input<0>().template find_coeff_indices<iganet::functionspace::interior>(G_knot_indices_interior_);
+            
+                // --- f --- rhs
+            var_knot_indices_ =
+                Base::template input<1>().template find_knot_indices<iganet::functionspace::interior>(collPts_.first);
+            var_coeff_indices_ =
+                Base::template input<1>().template find_coeff_indices<iganet::functionspace::interior>(var_knot_indices_);
+
+            var_knot_indices_interior_ =
+                Base::template input<1>().template find_knot_indices<iganet::functionspace::interior>(interiorCollPts_.first);
+            var_coeff_indices_interior_ =
+                Base::template input<1>().template find_coeff_indices<iganet::functionspace::interior>(var_knot_indices_interior_);
+
+            // ---- mat ----- mat_
+            mat_knot_indices_ =
+                Base::template input<2>().template find_knot_indices<iganet::functionspace::interior>(collPts_.first);
+            mat_coeff_indices_ =
+                Base::template input<2>().template find_coeff_indices<iganet::functionspace::interior>(mat_knot_indices_);
+            mat_knot_indices_interior_ =
+                Base::template input<2>().template find_knot_indices<iganet::functionspace::interior>(interiorCollPts_.first);
+            mat_coeff_indices_interior_ =
+                Base::template input<2>().template find_coeff_indices<iganet::functionspace::interior>(mat_knot_indices_interior_);
+                               
+            // // --- u_ --- sol vorher bitte deklarieren
+            // u_knot_indices_ =
+            //     Base::template output<0>().template find_knot_indices<iganet::functionspace::interior>(collPts_.first);
+            // u_coeff_indices_ =
+            //     Base::template output<0>().template find_coeff_indices<iganet::functionspace::interior>(u_knot_indices_);
+
+            // u_knot_indices_interior_ =
+            //     Base::template output<0>().template find_knot_indices<iganet::functionspace::interior>(interiorCollPts_.first);
+            // u_coeff_indices_interior_ =
+            //     Base::template output<0>().template find_coeff_indices<iganet::functionspace::interior>(u_knot_indices_interior_);
 
             return true;
             } else
@@ -392,7 +444,7 @@ class linear_elasticity : public iganet::IgANet<Optimizer, GeometryMap, Variable
         torch::Tensor loss(const torch::Tensor &outputs, int64_t epoch) override {
 
         // create u_ from the training's outputs
-        Base::u_.from_tensor(outputs);
+        Base::template output<0>().from_tensor(outputs);
 
         // pre-allocation of the loss values
         torch::Tensor totalLoss; 
@@ -638,20 +690,21 @@ class linear_elasticity : public iganet::IgANet<Optimizer, GeometryMap, Variable
                     };
                 }
 
-                var_knot_indices_boundary_ =
-                    Base::f_.template find_knot_indices<iganet::functionspace::interior>(tractionCollPts);
-                var_coeff_indices_boundary_ =
-                    Base::f_.template find_coeff_indices<iganet::functionspace::interior>(var_knot_indices_boundary_);
-                G_knot_indices_boundary_ =
-                    Base::G_.template find_knot_indices<iganet::functionspace::interior>(tractionCollPts);
-                G_coeff_indices_boundary_ =
-                    Base::G_.template find_coeff_indices<iganet::functionspace::interior>(G_knot_indices_boundary_);
+                u_knot_indices_tf_ =     // vormals _boundary (!)
+                    Base::template output<0>().template find_knot_indices<iganet::functionspace::interior>(tractionCollPts);        // boundary vs interior.
+                u_coeff_indices_tf_ =
+                    Base::template output<0>().template find_coeff_indices<iganet::functionspace::interior>(u_knot_indices_tf_);
+                G_knot_indices_tf_ =
+                    Base::template input<0>().template find_knot_indices<iganet::functionspace::interior>(tractionCollPts);
+                G_coeff_indices_tf_ =
+                    Base::template input<0>().template find_coeff_indices<iganet::functionspace::interior>(G_knot_indices_tf_);
+
             }  
 
             // calculate the jacobian of the affected boundary points
-            auto jacobianBoundary = Base::u_.ijac(Base::G_, tractionCollPts, 
-                var_knot_indices_boundary_, var_coeff_indices_boundary_,
-                G_knot_indices_boundary_, G_coeff_indices_boundary_);
+            auto jacobianBoundary = Base::template output<0>().ijac(Base::template input<0>(),         //G, xi, ?knot, ?coef, Gknot, Gcoef. ijac=J(?)*J(G)^T
+                tractionCollPts, u_knot_indices_tf_, u_coeff_indices_tf_,     //xi knot coef
+                G_knot_indices_tf_, G_coeff_indices_tf_);
             auto ux_x = *jacobianBoundary[0];
             auto ux_y = *jacobianBoundary[1];
             auto uy_x = *jacobianBoundary[2];
@@ -741,7 +794,7 @@ class linear_elasticity : public iganet::IgANet<Optimizer, GeometryMap, Variable
         // LINEAR ELASTICITY EQUATION
 
         // calculation of the second derivatives of the displacements (u)
-        auto hessianColl = Base::u_.ihess(Base::G_, interiorCollPts_.first, 
+        auto hessianColl = Base::template output<0>().ihess(Base::template input<0>(), interiorCollPts_.first, 
             var_knot_indices_interior_, var_coeff_indices_interior_,
             G_knot_indices_interior_, G_coeff_indices_interior_);
 
@@ -761,7 +814,7 @@ class linear_elasticity : public iganet::IgANet<Optimizer, GeometryMap, Variable
         torch::Tensor divStressY = torch::zeros({hessianColl(0,0,1).size(0)});
 
         // calculation of the divergence of the stress tensor, this is what we're trying to minimize
-        for (int i = 0; i < hessianColl(0,0,0).size(0); ++i) {      // 36 it
+        for (int i = 0; i < hessianColl(0,0,0).size(0); ++i) {      // 36 it über interior 
             at::Tensor tx = std::get<0>(interiorCollPts_.first)[i];   // Tensor
             double x_temp = tx.item<double>();  
             at::Tensor ty = std::get<1>(interiorCollPts_.first)[i];   // Tensor
@@ -783,7 +836,7 @@ class linear_elasticity : public iganet::IgANet<Optimizer, GeometryMap, Variable
         // BODY FORCE
 
         // evaluate the reference body force f at all interior collocation points
-        auto f = Base::f_.eval(interiorCollPts_.first);
+        auto f = Base::template input<1>().eval(interiorCollPts_.first);
 
         torch::Tensor bodyForce = torch::stack({*f[0], *f[1]}, /*dim=*/1).to(torch::kFloat32);
 
@@ -825,8 +878,8 @@ class linear_elasticity : public iganet::IgANet<Optimizer, GeometryMap, Variable
                 bcLoss = torch::tensor(0.0);
 
                 // evaluation of the displacements at the boundary points
-                auto u_bdr = Base::u_.template eval<iganet::functionspace::boundary>(collPts_.second);
-                // evaluation of the displacements at the reference boundary points
+                auto u_bdr = Base::template output<0>().template eval<iganet::functionspace::boundary>(collPts_.second);
+                // evaluation of the displacements at the reference boundary points.
                 auto bdr = ref_.template eval<iganet::functionspace::boundary>(collPts_.second);
 
                 // loop through all dirichlet sides
@@ -868,7 +921,7 @@ class linear_elasticity : public iganet::IgANet<Optimizer, GeometryMap, Variable
                 totalLoss.item<double>() << " = " << singleLossOutput.str() << std::endl;
         }
         
-        // SUPERVISED LEARNING
+        // SUPERVISED LEARNING, nachher bitte hier einfügen.
         else if (SUPERVISED_LEARNING_ == true) {
 
             // create command line output variable for all the different losses
@@ -922,7 +975,7 @@ class linear_elasticity : public iganet::IgANet<Optimizer, GeometryMap, Variable
                 bcLoss = torch::tensor(0.0);
 
                 // evaluation of the displacements at the boundary points
-                auto u_bdr = Base::u_.template eval<iganet::functionspace::boundary>(collPts_.second);
+                auto u_bdr = Base::template output<0>().template eval<iganet::functionspace::boundary>(collPts_.second);
                 // evaluation of the displacements at the reference boundary points
                 auto bdr = ref_.template eval<iganet::functionspace::boundary>(collPts_.second);
 
@@ -977,7 +1030,7 @@ class linear_elasticity : public iganet::IgANet<Optimizer, GeometryMap, Variable
             // STRESS CALCULATION
 
             // calculate the jacobian of the displacements (u) at the collocation points
-            auto jacobian = Base::u_.ijac(Base::G_, collPts_.first, var_knot_indices_, 
+            auto jacobian = Base::template output<0>().ijac(Base::template input<0>(), collPts_.first, var_knot_indices_, 
                 var_coeff_indices_, G_knot_indices_, G_coeff_indices_);
             
             auto ux_x = *jacobian[0];
@@ -1002,7 +1055,7 @@ class linear_elasticity : public iganet::IgANet<Optimizer, GeometryMap, Variable
             nlohmann::json netPoisson_j = nlohmann::json::array();
 
             // calculate the stress tensor
-            for (int i = 0; i < jacobian[0]->size(0); ++i) {        // 64 it
+            for (int i = 0; i < jacobian[0]->size(0); ++i) {        // 64 it über gesamte domain
 
                 at::Tensor tx = std::get<0>(collPts_.first)[i];
                 double x_temp = tx.item<double>();  
@@ -1046,7 +1099,7 @@ class linear_elasticity : public iganet::IgANet<Optimizer, GeometryMap, Variable
             // create a tensor of the collocation points
             torch::Tensor collPtsFirstAsTensor = torch::stack(
                 {std::get<0>(collPts_.first), std::get<1>(collPts_.first)}, 1);
-            auto displacementOfCollPts = Base::u_.eval(collPts_.first);
+            auto displacementOfCollPts = Base::template output<0>().eval(collPts_.first);
             torch::Tensor displacementAsTensor = torch::stack(
                 {*(displacementOfCollPts[0]), *(displacementOfCollPts[1]) }, 1);
 
@@ -1134,7 +1187,7 @@ int main() {
                                         tolerance_change(1e-12).
                                         line_search_fn("strong_wolfe");
 
-    // OPTIONAL .json input for easy change of params. no need to rebuild :)
+    // OPTIONAL .json input for easy change of params. no need to rebuild :) auszukommentieren, wenn nicht gebraucht.
     bool USERINPUT = true;
     std::ifstream file("/home/isabellaunix/DevelDA/singerDA/ConfigResult/config.json");
     if (!file) {
@@ -1192,6 +1245,7 @@ int main() {
         for (auto side : TFBC_SIDES) std::cout << side << " ";
         std::cout << "\n";
     } 
+    // OPTIONAL END
     // --------------------------- //
 
 
@@ -1205,16 +1259,21 @@ int main() {
     using real_t = double;
     using namespace iganet::literals;
     using optimizer_t = torch::optim::LBFGS;
-    using geometry_t = iganet::S<iganet::UniformBSpline<real_t, 2, DEGREE, DEGREE>>;
-    using variable_t = iganet::S<iganet::UniformBSpline<real_t, 2, DEGREE, DEGREE>>;
-    using linear_elasticity_t = linear_elasticity<optimizer_t, geometry_t, variable_t>;
+    
+    using geometry_t = iganet::S<iganet::UniformBSpline<real_t, 2, 4, 4>>;   
+    using variable_t = iganet::S<iganet::UniformBSpline<real_t, 2, 4, 4>>;
+    using material_t = iganet::S<iganet::UniformBSpline<real_t, 2, 4, 4>>;
+
+    using inputs_t = std::tuple<geometry_t, variable_t, material_t>;     
+    using outputs_t = std::tuple<variable_t>;     
+    using linear_elasticity_t = linear_elasticity<optimizer_t, inputs_t, outputs_t>;
 
     gsMatrix<double> gsCtrlPts;
     gsMatrix<double> gsDisplacements;
     gsMatrix<double> gsStresses;
-    std::tie(gsCtrlPts, gsDisplacements, gsStresses) = 
-        linear_elasticity_t::RunGismoSimulation(NR_CTRL_PTS, DEGREE, 
-            YOUNG_MODULUS, POISSON_RATIO, DIRI_SIDES, FORCE_SIDES, BODY_FORCE);
+    // std::tie(gsCtrlPts, gsDisplacements, gsStresses) = 
+    //     linear_elasticity_t::RunGismoSimulation(28, DEGREE, 
+    //         YOUNG_MODULUS, POISSON_RATIO, DIRI_SIDES, FORCE_SIDES, BODY_FORCE);
         
     linear_elasticity_t net( // simulation parameters
         lambda, mu, EMAT1, NUMAT1, EMAT2, NUMAT2, SUPERVISED_LEARNING, MAX_EPOCH, MIN_LOSS, solver_options, 
@@ -1266,13 +1325,13 @@ int main() {
         net.appendToJsonFile("gsRef_OriginalCtrlPts", gsRefOriginalCtrlPts_j);
     }
 
-    // imposing body force
-    net.f().transform([=](const std::array<real_t, 2> xi) {
+    // imposing body force f
+    net.template input<1>().transform([=](const std::array<real_t, 2> xi) {
         return std::array<real_t, 2>{BODY_FORCE.first, BODY_FORCE.second};
     });
 
     // get the coefficients of the control points
-    torch::Tensor ctrlPtsCoeffs = net.G().as_tensor().slice(0, 0, NR_CTRL_PTS);
+    torch::Tensor ctrlPtsCoeffs = net.template output<0>().as_tensor().slice(0, 0, NR_CTRL_PTS);
     nlohmann::json ctrlPtsCoeffs_j = nlohmann::json::array();
     for (int i = 0; i < NR_CTRL_PTS; ++i) {
         ctrlPtsCoeffs_j.push_back({ctrlPtsCoeffs[i].item<double>()});
@@ -1380,19 +1439,11 @@ int main() {
     //   // evaluate the new solution
     //   net.eval();
 
-    #ifdef IGANET_WITH_MATPLOT
-    // Plot the solution
-    // net.G().space().plot(net.u().space(), net.collPts().first, json)->show();
-    // net.G().space().plot(net.collPts().first, json)->show();
-    // // Plot the difference between the exact and predicted solutions
-    // net.G().plot(net.ref().abs_diff(net.u()), net.collPts().first, json)->show();
-    #endif
-
     // PROCESSING NETWORK OUTPUT FOR SPLINEPY
 
     // get the geometry and displacement as tensors
-    torch::Tensor geometryAsTensor = net.G().as_tensor();
-    torch::Tensor displacementAsTensor = net.u().as_tensor();
+    torch::Tensor geometryAsTensor = net.template input<0>().as_tensor();
+    torch::Tensor displacementAsTensor = net.template output<0>().as_tensor();
     
     // creating collection matrix for all the control points (iganet)
     gsMatrix<real_t> netCtrlPts(NR_CTRL_PTS * NR_CTRL_PTS, 2);
@@ -1460,3 +1511,4 @@ int main() {
     iganet::finalize();
     return 0;
 }
+// int main() { return 0; }
