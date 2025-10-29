@@ -1,16 +1,10 @@
 {
-  "material": {
-    "young_modulus": 210.0,
-    "poisson_ratio": 0.25
-  },
   "simulation": {
     "max_epoch": 100,
-    "min_loss": 1e-8,
+    "min_loss": 100,
     "supervised_learning": false,
     "json_path": "/home/isabellaunix/DevelDA/singerDA/ConfigResult/result.json",
-    "USERINPUT": false,
-    "layers": [25, 25],
-    "activations": ["sigmoid","sigmoid","none"]
+    "USERINPUT": false
   },
   "reference_simulation": {
     "run": false,
@@ -25,16 +19,23 @@
     "force_sides": [],
     "diri_sides": [
       [1, 0.0, 0.0],
-      [2, 0.05, 0.0]
+      [2, 0.5, 0.0]
     ],
     "tfbc_sides": [3, 4]
   },
   "body_force": [0.0, 0.0],
   "matlab": {
     "s1": 0,
-    "s2_diri": [0.05, 0],
+    "s2_diri": [0.5, 0],
     "s3": 0,
     "s4": 0,
-    "nrCtrlPts": [8, 8]
+
+    "young_modulus": 210.0,
+    "poisson_ratio": 0.31,
+
+    "young_modulus_mat1": 210.0,
+    "poisson_ratio_mat1": 0.31,
+    "young_modulus_mat2": 210,
+    "poisson_ratio_mat2": 0.31
   }
 }

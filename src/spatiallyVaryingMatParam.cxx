@@ -68,16 +68,6 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
         Customizable::template output_interior_knot_indices_t<0> u_knot_indices_Nbdr_;
         Customizable::template output_interior_coeff_indices_t<0> u_coeff_indices_Nbdr_;
 
-
-        // material properties - lame's parameters
-        double lambda_;
-        double mu_;
-            // material parameter function
-        double emat1_;
-        double numat1_;
-        double emat2_;
-        double numat2_;
-
         // simulation parameters
         int MAX_EPOCH_;
         double MIN_LOSS_;
@@ -91,15 +81,13 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
     public:
         // Constructor
         template <typename... Args>
-        linear_elasticity(double lambda, double mu, double emat1, double numat1, double emat2, double numat2,                                                               // material
-                          bool SUPERVISED_LEARNING, int MAX_EPOCH, double MIN_LOSS, const torch::optim::LBFGSOptions& solver_opts,                                          // nn options
+        linear_elasticity(bool SUPERVISED_LEARNING, int MAX_EPOCH, double MIN_LOSS, const torch::optim::LBFGSOptions& solver_opts,                                          // nn options
                           std::vector<int> TFBC_SIDES, std::vector<std::tuple<int, double, double>> FORCE_SIDES, std::vector<std::tuple<int, double, double>> DIRI_SIDES,   // boundary conditions
                           int64_t NR_CTRL_PTS, std::string JSON_PATH, std::vector<int64_t> &&layers,                                                                        // simulation/nn options
                           std::vector<std::vector<std::any>> &&activations, Args &&...args)
             : Base(std::forward<std::vector<int64_t>>(layers),
                    std::forward<std::vector<std::vector<std::any>>>(activations),
                    std::forward<Args>(args)...),
-                   lambda_(lambda), mu_(mu), emat1_(emat1), numat1_(numat1), emat2_(emat2), numat2_(numat2),
                    SUPERVISED_LEARNING_(SUPERVISED_LEARNING), MAX_EPOCH_(MAX_EPOCH), MIN_LOSS_(MIN_LOSS),
                    TFBC_SIDES_(TFBC_SIDES), FORCE_SIDES_(FORCE_SIDES), DIRI_SIDES_(DIRI_SIDES),
                    NR_CTRL_PTS_(NR_CTRL_PTS), JSON_PATH_(std::move(JSON_PATH)), 
@@ -177,52 +165,6 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
             return matlabDisplacements;
         }
 
-        // helper function to calculate  Greville abscissae 
-        static std::vector<double> computeGrevilleAbscissae
-            (const gsKnotVector<double>& knotVector, int degree, int numCtrlPts) {
-            std::vector<double> greville(numCtrlPts, 0.0);
-            
-            for (int i = 0; i < numCtrlPts; ++i) {
-                double sum = 0.0;
-                for (int j = i + 1; j <= i + degree; ++j) {
-                    sum += knotVector.at(j);
-                }
-                greville[i] = sum / degree;
-            }
-            return greville;
-        }
-
-        // material description.
-        std::pair<double, double> FuncMat(double valX, double valY) {       
-            if (valX >= 0.5) {      //&& valY >= 0.5
-                return {emat2_, numat2_};
-            } else {
-                return {emat1_, numat1_};
-            }
-        }
-        double FuncLambda(double valX, double valY) {
-            auto mat = FuncMat(valX, valY);
-            double E_temp = mat.first;
-            double nu_temp = mat.second;
-
-            double num =  (E_temp * nu_temp);
-            double denom = (1 + nu_temp) * (1 - 2 * nu_temp);
-
-            double lambda_temp = num /denom;
-            return lambda_temp;
-        } 
-        double FuncMu(double valX, double valY) {
-            auto mat = FuncMat(valX, valY);
-            double E_temp = mat.first;
-            double nu_temp = mat.second;
-
-            double num =  E_temp;
-            double denom = 2 * (1 + nu_temp);
-            
-            double mu_temp = num /denom;
-            return mu_temp;
-        }
-
         // Initializes  epoch, special behaviour for initial epoch
         bool epoch(int64_t epoch) override {
             std::cout << "Epoch: " << epoch << std::endl;               // print epoch number
@@ -264,14 +206,14 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
                     Base::template input<1>().template find_coeff_indices<iganet::functionspace::interior>(var_knot_indices_interior_);
 
                 // ---- mat ----- mat_
-                mat_knot_indices_ =
-                    Base::template input<2>().template find_knot_indices<iganet::functionspace::interior>(collPts_.first);
-                mat_coeff_indices_ =
-                    Base::template input<2>().template find_coeff_indices<iganet::functionspace::interior>(mat_knot_indices_);
-                mat_knot_indices_interior_ =
-                    Base::template input<2>().template find_knot_indices<iganet::functionspace::interior>(interiorCollPts_.first);
-                mat_coeff_indices_interior_ =
-                    Base::template input<2>().template find_coeff_indices<iganet::functionspace::interior>(mat_knot_indices_interior_);
+                // mat_knot_indices_ =
+                //     Base::template input<2>().template find_knot_indices<iganet::functionspace::interior>(collPts_.first);
+                // mat_coeff_indices_ =
+                //     Base::template input<2>().template find_coeff_indices<iganet::functionspace::interior>(mat_knot_indices_);
+                // mat_knot_indices_interior_ =
+                //     Base::template input<2>().template find_knot_indices<iganet::functionspace::interior>(interiorCollPts_.first);
+                // mat_coeff_indices_interior_ =
+                //     Base::template input<2>().template find_coeff_indices<iganet::functionspace::interior>(mat_knot_indices_interior_);
                                 
                 // // --- u_ --- sol vorher bitte deklarieren
                 // u_knot_indices_ =
@@ -552,13 +494,11 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
                     mat_coeff_indices_Nbdr_ =
                         Base::template input<2>().template find_coeff_indices<iganet::functionspace::interior>(mat_knot_indices_Nbdr_);
 
-                    std::cout << mat_coeff_indices_Nbdr_ << std::endl;
-
                 }  
 
                 // calculate  Jacobian of  affected (Neumann) boundary points
-                auto Jacobian_Nbdr = Base::template output<0>().ijac(Base::template input<0>(),         //G, xi, ?knot, ?coef, Gknot, Gcoef. ijac=J(?)*J(G)^T
-                    tractionCollPts, u_knot_indices_Nbdr_, u_coeff_indices_Nbdr_,     //xi knot coef
+                auto Jacobian_Nbdr = Base::template output<0>().ijac(Base::template input<0>(), tractionCollPts,         //G, xi, ?knot, ?coef, Gknot, Gcoef. ijac=J(?)*J(G)^T
+                    u_knot_indices_Nbdr_, u_coeff_indices_Nbdr_,     //xi knot coef
                     G_knot_indices_Nbdr_, G_coeff_indices_Nbdr_);
                 auto ux_x = *Jacobian_Nbdr[0];      // all sizes [12] so  tf boundaries
                 auto ux_y = *Jacobian_Nbdr[1];
@@ -571,6 +511,7 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
                 // calculate  traction values at  boundary points
                 int pointCtr = 0;
                 int sideCtr = 0; 
+                auto mat = Base::template input<2>().eval(tractionCollPts);
 
                 for (int side : neumannSides) {
                     int n_vals = nrCollPts_ - intersecCtr[sideCtr];
@@ -580,23 +521,25 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
 
                         double x_temp = tractionCollPts[0][i].item<double>();
                         double y_temp = tractionCollPts[1][i].item<double>();
+                        double matLambda_temp = mat(0)[i].template item<double>();
+                        double matMu_temp     = mat(1)[i].template item<double>();
 
                         switch (side) {
                             case 1:
-                                tractionValuesX[idx] =  - FuncLambda(x_temp, y_temp) * (ux_x[idx] + uy_y[idx]) - 2 * FuncMu(x_temp, y_temp) * ux_x[idx];
-                                tractionValuesY[idx] =  - FuncMu(x_temp, y_temp) * (uy_x[idx] + ux_y[idx]);
+                                tractionValuesX[idx] =  - matLambda_temp * (ux_x[idx] + uy_y[idx]) - 2 * matMu_temp * ux_x[idx];
+                                tractionValuesY[idx] =  - matMu_temp * (uy_x[idx] + ux_y[idx]);
                                 break;
                             case 2:
-                                tractionValuesX[idx] = FuncLambda(x_temp, y_temp) * (ux_x[idx] + uy_y[idx]) + 2 * FuncMu(x_temp, y_temp) * ux_x[idx];
-                                tractionValuesY[idx] = FuncMu(x_temp, y_temp) * (uy_x[idx] + ux_y[idx]);
+                                tractionValuesX[idx] = matLambda_temp * (ux_x[idx] + uy_y[idx]) + 2 * matMu_temp * ux_x[idx];
+                                tractionValuesY[idx] = matMu_temp * (uy_x[idx] + ux_y[idx]);
                                 break;
                             case 3: 
-                                tractionValuesX[idx] =  - FuncMu(x_temp, y_temp) * (uy_x[idx] + ux_y[idx]);
-                                tractionValuesY[idx] =  - FuncLambda(x_temp, y_temp) * (ux_x[idx] + uy_y[idx]) - 2 * FuncMu(x_temp, y_temp) * uy_y[idx];
+                                tractionValuesX[idx] =  - matMu_temp * (uy_x[idx] + ux_y[idx]);
+                                tractionValuesY[idx] =  - matLambda_temp * (ux_x[idx] + uy_y[idx]) - 2 * matMu_temp * uy_y[idx];
                                 break;
                             case 4:
-                                tractionValuesX[idx] = FuncMu(x_temp, y_temp) * (uy_x[idx] + ux_y[idx]);
-                                tractionValuesY[idx] = FuncLambda(x_temp, y_temp) * (ux_x[idx] + uy_y[idx]) + 2 * FuncMu(x_temp, y_temp) * uy_y[idx];
+                                tractionValuesX[idx] = matMu_temp * (uy_x[idx] + ux_y[idx]);
+                                tractionValuesY[idx] = matLambda_temp * (ux_x[idx] + uy_y[idx]) + 2 * matMu_temp * uy_y[idx];
                                 break;
                             default:
                                 std::cerr << "Error: invalid side = " << side << std::endl;
@@ -653,6 +596,9 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
                             var_knot_indices_interior_, var_coeff_indices_interior_,
                             G_knot_indices_interior_, G_coeff_indices_interior_);
 
+
+            auto mat = Base::template input<2>().eval(interiorCollPts_.first);      // matx = mat(0)
+
             // partial derivatives of  displacements (u) 
             auto& ux_xx = Hessian(0,0,0);
             auto& ux_xy = Hessian(0,1,0);
@@ -674,14 +620,16 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
                 double x_temp = tx.item<double>();  
                 at::Tensor ty = std::get<1>(interiorCollPts_.first)[i];
                 double y_temp = ty.item<double>();  
+                double matLambda_temp = mat(0)[i].template item<double>();
+                double matMu_temp     = mat(1)[i].template item<double>();
 
                 // x-direction
-                divStressX[i] = (FuncLambda(x_temp, y_temp) + 2 * FuncMu(x_temp, y_temp)) * ux_xx[i] + 
-                                FuncMu(x_temp, y_temp) * ux_yy[i] + (FuncLambda(x_temp, y_temp) + FuncMu(x_temp, y_temp)) * uy_xy[i];
+                divStressX[i] = (matLambda_temp + 2 * matMu_temp) * ux_xx[i] + 
+                                matMu_temp* ux_yy[i] + (matLambda_temp + matMu_temp) * uy_xy[i];
 
                 // y-direction
-                divStressY[i] = FuncMu(x_temp, y_temp) * uy_xx[i] + (FuncLambda(x_temp, y_temp) + 2 * FuncMu(x_temp, y_temp)) * uy_yy[i] + 
-                                (FuncLambda(x_temp, y_temp) + FuncMu(x_temp, y_temp)) * ux_xy[i];
+                divStressY[i] = matMu_temp * uy_xx[i] + (matLambda_temp + 2 * matMu_temp) * uy_yy[i] + 
+                                (matLambda_temp + matMu_temp) * ux_xy[i];
                 
             }
             
@@ -842,13 +790,13 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
                         switch (sideNr) {
                             case 1:
                                 *bcLoss += bcWeight * 
-                                    (torch::mse_loss(*std::get<0>(u_Dbdr)[0], *std::get<0>(ref_Dbdr)[0]) + 
-                                    torch::mse_loss(*std::get<0>(u_Dbdr)[1], *std::get<0>(ref_Dbdr)[1]));
+                                    (torch::mse_loss(*std::get<0>(u_Dbdr)[0], *std::get<0>(ref_Dbdr)[0]) +      // seite 1 x (links)  0
+                                    torch::mse_loss(*std::get<0>(u_Dbdr)[1], *std::get<0>(ref_Dbdr)[1]));       // seite 1 y (rechts) 0
                                 break;
                             case 2:
                                 *bcLoss += bcWeight * 
-                                    (torch::mse_loss(*std::get<1>(u_Dbdr)[0], *std::get<1>(ref_Dbdr)[0]) + 
-                                    torch::mse_loss(*std::get<1>(u_Dbdr)[1], *std::get<1>(ref_Dbdr)[1]));
+                                    (torch::mse_loss(*std::get<1>(u_Dbdr)[0], *std::get<1>(ref_Dbdr)[0]) +      // seite 2 x (links)  0.5
+                                    torch::mse_loss(*std::get<1>(u_Dbdr)[1], *std::get<1>(ref_Dbdr)[1]));       // seite 2 y (rechts) 0
                                 break;
                             case 3:
                                 *bcLoss += bcWeight * 
@@ -911,6 +859,8 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
                 nlohmann::json netYStresses_j = nlohmann::json::array();
                 nlohmann::json netPoisson_j = nlohmann::json::array();
 
+                auto mat = Base::template input<2>().eval(collPts_.first);
+
                 // calculate  stress tensor
                 for (int i = 0; i < Jacobian[0]->size(0); ++i) {        // 64 it über gesamte domain
 
@@ -918,21 +868,23 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
                     double x_temp = tx.item<double>();  
                     at::Tensor ty = std::get<1>(collPts_.first)[i];
                     double y_temp = ty.item<double>();  
+                    double matLambda_temp = mat(0)[i].template item<double>();
+                    double matMu_temp     = mat(1)[i].template item<double>();
 
                     // calculate  stress values for all collocation points
-                    sigma_xx[i] = FuncLambda(x_temp, y_temp) * (ux_x[i] + uy_y[i]) + 2 * FuncMu(x_temp, y_temp) * ux_x[i];
-                    sigma_xy[i] = FuncMu(x_temp, y_temp) * (uy_x[i] + ux_y[i]);
-                    sigma_yy[i] = FuncLambda(x_temp, y_temp) * (ux_x[i] + uy_y[i]) + 2 * FuncMu(x_temp, y_temp) * uy_y[i];
+                    sigma_xx[i] = matLambda_temp * (ux_x[i] + uy_y[i]) + 2 * matMu_temp * ux_x[i];
+                    sigma_xy[i] = matMu_temp * (uy_x[i] + ux_y[i]);
+                    sigma_yy[i] = matLambda_temp * (ux_x[i] + uy_y[i]) + 2 * matMu_temp * uy_y[i];
                     
                     // calculate von mises stress at  collocation points
                     sigma_vm[i] = sqrt(sigma_xx[i] * sigma_xx[i] + sigma_yy[i] * sigma_yy[i] 
                                     - sigma_xx[i] * sigma_yy[i] + sigma_xy[i] * sigma_xy[i] * 3);
                     
                     // calculate  strains at  collocation points
-                    epsilon_xx[i] = (FuncLambda(x_temp, y_temp) + FuncMu(x_temp, y_temp)) / (FuncMu(x_temp, y_temp) * (3 * FuncLambda(x_temp, y_temp) + 2 * FuncMu(x_temp, y_temp))) * 
-                        (sigma_xx[i] - FuncLambda(x_temp, y_temp) / (2 * (FuncLambda(x_temp, y_temp) + FuncMu(x_temp, y_temp))) * sigma_yy[i]);
-                    epsilon_yy[i] = (FuncLambda(x_temp, y_temp) + FuncMu(x_temp, y_temp)) / (FuncMu(x_temp, y_temp) * (3 * FuncLambda(x_temp, y_temp) + 2 * FuncMu(x_temp, y_temp))) * 
-                        (sigma_yy[i] - FuncLambda(x_temp, y_temp) / (2 * (FuncLambda(x_temp, y_temp) + FuncMu(x_temp, y_temp))) * sigma_xx[i]);
+                    epsilon_xx[i] = (matLambda_temp + matMu_temp) / (matMu_temp * (3 * matLambda_temp + 2 * matMu_temp)) * 
+                        (sigma_xx[i] - matLambda_temp / (2 * (matLambda_temp + matMu_temp)) * sigma_yy[i]);
+                    epsilon_yy[i] = (matLambda_temp + matMu_temp) / (matMu_temp * (3 * matLambda_temp + 2 * matMu_temp)) * 
+                        (sigma_yy[i] - matLambda_temp / (2 * (matLambda_temp + matMu_temp)) * sigma_xx[i]);
 
                     // only valid for load in x-direction
                     poisson_re[i] = - epsilon_yy[i] / epsilon_xx[i];
@@ -1003,23 +955,11 @@ int main() {
     iganet::verbose(std::cout);
 
     // ------- USER INPUTS ------- //
-    
-    // material parameters
-    double EMAT1 = 210 ;
-    double NUMAT1 = 0.27 ;
-    double EMAT2 = 5 ;
-    double NUMAT2 = 0.49 ;
-
     // simulation parameters
     int MAX_EPOCH = 100;
     double MIN_LOSS = 1e-12;
     bool SUPERVISED_LEARNING = false;
     std::string JSON_PATH = "/home/isabellaunix/DevelDA/singerDA/ConfigResult/result.json";       
-
-    // reference simulation parameters
-    bool RUN_REF_SIM = false;
-    int NR_CTRL_PTS_REF = 50;
-    int DEGREE_REF = 4;
 
     // spline parameters
     int64_t NR_CTRL_PTS = 8;  // in each direction 
@@ -1057,24 +997,12 @@ int main() {
     file >> j;
     USERINPUT = j["simulation"]["USERINPUT"];
     if (USERINPUT==false) {
-            // material parameters
-        // YOUNG_MODULUS = j["material"]["young_modulus"];
-        // POISSON_RATIO = j["material"]["poisson_ratio"];
-        EMAT1 = j["material"]["young_modulus_mat1"];
-        NUMAT1 = j["material"]["poisson_ratio_mat1"];
-        EMAT2 = j["material"]["young_modulus_mat2"];
-        NUMAT2 = j["material"]["poisson_ratio_mat2"];
 
         // simulation parameters
         MAX_EPOCH = j["simulation"]["max_epoch"];
         MIN_LOSS = j["simulation"]["min_loss"];
         SUPERVISED_LEARNING = j["simulation"]["supervised_learning"];
         std::string JSON_PATH = j["simulation"]["json_path"];
-
-        // reference simulation
-        RUN_REF_SIM = j["reference_simulation"]["run"];
-        NR_CTRL_PTS_REF = j["reference_simulation"]["nr_ctrl_pts_ref"];
-        DEGREE_REF = j["reference_simulation"]["degree_ref"];
 
         // spline parameters
         NR_CTRL_PTS = j["spline"]["nr_ctrl_pts"];
@@ -1098,21 +1026,12 @@ int main() {
         BODY_FORCE.second = j["body_force"][1];
 
         // just to verify
-        // std::cout << "Young's modulus: " << YOUNG_MODULUS << "\n";
-        std::cout << "Dirichlet Boundary Conditions: " << DIRI_SIDES << "\n";
         std::cout << "TFBC sides: ";
         for (auto side : TFBC_SIDES) std::cout << side << " ";
         std::cout << "\n";
     } 
     // OPTIONAL END
     // --------------------------- //
-
-    // calculation of lame parameters
-    double YOUNG_MODULUS = (EMAT1 + EMAT2)/2;
-    double POISSON_RATIO = (NUMAT1 + NUMAT2)/2;
-    double lambda = (YOUNG_MODULUS * POISSON_RATIO) /
-     ((1 + POISSON_RATIO) * (1 - 2 * POISSON_RATIO));
-    double mu = YOUNG_MODULUS / (2 * (1 + POISSON_RATIO));
 
     using real_t = double;
     using namespace iganet::literals;
@@ -1127,7 +1046,7 @@ int main() {
     using linear_elasticity_t = linear_elasticity<optimizer_t, inputs_t, outputs_t>;
         
     linear_elasticity_t net( // simulation parameters
-        lambda, mu, EMAT1, NUMAT1, EMAT2, NUMAT2, SUPERVISED_LEARNING, MAX_EPOCH, MIN_LOSS, solver_options, 
+        SUPERVISED_LEARNING, MAX_EPOCH, MIN_LOSS, solver_options, 
         TFBC_SIDES, FORCE_SIDES, DIRI_SIDES, NR_CTRL_PTS, JSON_PATH,
         // Number of neurons per layer
         {25, 25},
@@ -1140,6 +1059,11 @@ int main() {
         // Number of B-spline coefficients of  variable
         std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS))
     );
+
+    // xml in net.template input<1>().eval(collPts.first)
+    pugi::xml_document xml;
+    xml.load_file("/home/isabellaunix/DevelDA/singerDA/ConfigResult/mat.xml");
+    net.template input<2>().from_xml(xml);
 
     // imposing body force f
     net.template input<1>().transform([=](const std::array<real_t, 2> xi) {
