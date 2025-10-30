@@ -1054,9 +1054,11 @@ int main() {
         {{iganet::activation::sigmoid},
             {iganet::activation::sigmoid},
             {iganet::activation::none}},
-        // Number of B-spline coefficients of  geometry
-        std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)),
-        // Number of B-spline coefficients of  variable
+        // Number of B-spline coefficients of input in inputs_t
+        std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS),
+                   iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS),
+                   iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)),
+        // Number of B-spline coefficients of output in outputs_t
         std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS))
     );
 
