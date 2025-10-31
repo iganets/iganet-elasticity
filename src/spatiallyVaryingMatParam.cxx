@@ -1148,11 +1148,10 @@ int main() {
         }
     }
 
-    // Set maximum number of epochs
-    net.options().max_epoch(MAX_EPOCH);
-
-    // Set tolerance for  loss functions
-    net.options().min_loss(MIN_LOSS);
+    net.options().max_epoch(MAX_EPOCH);     // Set maximum number of epochs
+    net.options().min_loss(MIN_LOSS);       // Set tolerance for  loss functions
+    net.options().min_loss_change(0);       // overwrite. to only have max epoch and min loss as stopping criteria
+    net.options().min_loss_rel_change(0);   // overwrite.
 
     // Start time measurement
     auto t1 = std::chrono::high_resolution_clock::now();
