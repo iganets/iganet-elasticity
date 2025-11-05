@@ -154,7 +154,7 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
             file.close();
         
             // extract matlabDisplacements array
-            auto matlabDisplacements_j = jsonData["matlabDisplacements"];
+            auto matlabDisplacements_j = jsonData["lab_Displacements"];
             int numCtrlPts = matlabDisplacements_j.size();
             torch::Tensor matlabDisplacements = torch::empty({numCtrlPts, 2}, options); // create tensor for displacements
             for (int i = 0; i < numCtrlPts; ++i) {                                      // fill  tensor with data from  JSON file
@@ -231,7 +231,7 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
                 return false;
         }
 
-        /// @brief Computes  loss function
+        // Computes  loss function
         torch::Tensor loss(const torch::Tensor &outputs, int64_t epoch) override {
 
             // create u_ from  training's outputs
@@ -244,6 +244,7 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
             std::optional<torch::Tensor> tfbcLoss;
             std::optional<torch::Tensor> gsLoss;
             std::optional<torch::Tensor> forceLoss;
+            std::optional<torch::Tensor> matLoss;
 
             // pre-allocation of  tensors for  traction boundary conditions
             std::optional<torch::Tensor> forceValues;
@@ -500,10 +501,10 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
                 auto Jacobian_Nbdr = Base::template output<0>().ijac(Base::template input<0>(), tractionCollPts,         //G, xi, ?knot, ?coef, Gknot, Gcoef. ijac=J(?)*J(G)^T
                     u_knot_indices_Nbdr_, u_coeff_indices_Nbdr_,     //xi knot coef
                     G_knot_indices_Nbdr_, G_coeff_indices_Nbdr_);
-                auto ux_x = *Jacobian_Nbdr[0];      // all sizes [12] so  tf boundaries
-                auto ux_y = *Jacobian_Nbdr[1];
-                auto uy_x = *Jacobian_Nbdr[2];
-                auto uy_y = *Jacobian_Nbdr[3];
+                auto ux_x = Jacobian_Nbdr(0,0);         // og *Jacobian_Nbdr[0];      // all sizes [12] so  tf boundaries
+                auto ux_y = Jacobian_Nbdr(0,1);
+                auto uy_x = Jacobian_Nbdr(1,0);
+                auto uy_y = Jacobian_Nbdr(1,1);
 
                 // allocate tensors for  traction-free boundary conditions (tfbc)
                 torch::Tensor tractionValuesX = torch::zeros({tractionCollPts[0].size(0)});
@@ -519,27 +520,25 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
                     for (int i = 0; i < n_vals; ++i) {
                         int idx = pointCtr + i;     //11 oder 12 it. 0 bis 12?
 
-                        double x_temp = tractionCollPts[0][i].item<double>();
-                        double y_temp = tractionCollPts[1][i].item<double>();
-                        double matLambda_temp = mat(0)[i].template item<double>();
-                        double matMu_temp     = mat(1)[i].template item<double>();
+                        double matLambda_temp = mat(0)[idx].template item<double>();
+                        double matMu_temp     = mat(1)[idx].template item<double>();
 
                         switch (side) {
                             case 1:
-                                tractionValuesX[idx] =  - matLambda_temp * (ux_x[idx] + uy_y[idx]) - 2 * matMu_temp * ux_x[idx];
-                                tractionValuesY[idx] =  - matMu_temp * (uy_x[idx] + ux_y[idx]);
+                                tractionValuesX[idx] =  - matLambda_temp * (ux_x[idx] + uy_y[idx]) - 2 * matMu_temp * ux_x[idx];    // \σ_11  == C11ij : epsiolnij = C_11idx : epsilon_idx      
+                                tractionValuesY[idx] =  - matMu_temp * (uy_x[idx] + ux_y[idx]);                                     // \σ_12
                                 break;
                             case 2:
-                                tractionValuesX[idx] = matLambda_temp * (ux_x[idx] + uy_y[idx]) + 2 * matMu_temp * ux_x[idx];
-                                tractionValuesY[idx] = matMu_temp * (uy_x[idx] + ux_y[idx]);
+                                tractionValuesX[idx] = matLambda_temp * (ux_x[idx] + uy_y[idx]) + 2 * matMu_temp * ux_x[idx];       // \σ_11
+                                tractionValuesY[idx] = matMu_temp * (uy_x[idx] + ux_y[idx]);                                        // \σ_12
                                 break;
                             case 3: 
-                                tractionValuesX[idx] =  - matMu_temp * (uy_x[idx] + ux_y[idx]);
-                                tractionValuesY[idx] =  - matLambda_temp * (ux_x[idx] + uy_y[idx]) - 2 * matMu_temp * uy_y[idx];
+                                tractionValuesX[idx] =  - matMu_temp * (uy_x[idx] + ux_y[idx]);                                     // \σ_21
+                                tractionValuesY[idx] =  - matLambda_temp * (Jacobian_Nbdr(0,0)[idx] + uy_y[idx]) - 2 * matMu_temp * uy_y[idx];    // \σ_22
                                 break;
                             case 4:
-                                tractionValuesX[idx] = matMu_temp * (uy_x[idx] + ux_y[idx]);
-                                tractionValuesY[idx] = matLambda_temp * (ux_x[idx] + uy_y[idx]) + 2 * matMu_temp * uy_y[idx];
+                                tractionValuesX[idx] = matMu_temp * (uy_x[idx] + ux_y[idx]);                                        // \σ_21
+                                tractionValuesY[idx] = matLambda_temp * (ux_x[idx] + uy_y[idx]) + 2 * matMu_temp * uy_y[idx];       // \σ_22
                                 break;
                             default:
                                 std::cerr << "Error: invalid side = " << side << std::endl;
@@ -616,10 +615,7 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
 
             // calculation of  divergence of  stress tensor, this is what we're trying to minimize
             for (int i = 0; i < Hessian(0,0,0).size(0); ++i) {      // 36 it über interior 
-                at::Tensor tx = std::get<0>(interiorCollPts_.first)[i];
-                double x_temp = tx.item<double>();  
-                at::Tensor ty = std::get<1>(interiorCollPts_.first)[i];
-                double y_temp = ty.item<double>();  
+
                 double matLambda_temp = mat(0)[i].template item<double>();
                 double matMu_temp     = mat(1)[i].template item<double>();
 
@@ -838,10 +834,10 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
                                 var_knot_indices_, var_coeff_indices_,
                                 G_knot_indices_, G_coeff_indices_);
                 
-                auto ux_x = *Jacobian[0];
-                auto ux_y = *Jacobian[1];
-                auto uy_x = *Jacobian[2];
-                auto uy_y = *Jacobian[3];
+                auto ux_x = Jacobian(0,0);
+                auto ux_y = Jacobian(0,1);
+                auto uy_x = Jacobian(1,0);
+                auto uy_y = Jacobian(1,1);
 
                 // allocate  stress tensor
                 torch::Tensor sigma_xx = torch::zeros({Jacobian[0]->size(0)});
@@ -864,10 +860,6 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
                 // calculate  stress tensor
                 for (int i = 0; i < Jacobian[0]->size(0); ++i) {        // 64 it über gesamte domain
 
-                    at::Tensor tx = std::get<0>(collPts_.first)[i];
-                    double x_temp = tx.item<double>();  
-                    at::Tensor ty = std::get<1>(collPts_.first)[i];
-                    double y_temp = ty.item<double>();  
                     double matLambda_temp = mat(0)[i].template item<double>();
                     double matMu_temp     = mat(1)[i].template item<double>();
 
@@ -880,7 +872,7 @@ class linear_elasticity : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
                     sigma_vm[i] = sqrt(sigma_xx[i] * sigma_xx[i] + sigma_yy[i] * sigma_yy[i] 
                                     - sigma_xx[i] * sigma_yy[i] + sigma_xy[i] * sigma_xy[i] * 3);
                     
-                    // calculate  strains at  collocation points
+                    // calculate  strains at  collocation points. $\epsilon = 1/E \sigma = C^-1 : \sigma$
                     epsilon_xx[i] = (matLambda_temp + matMu_temp) / (matMu_temp * (3 * matLambda_temp + 2 * matMu_temp)) * 
                         (sigma_xx[i] - matLambda_temp / (2 * (matLambda_temp + matMu_temp)) * sigma_yy[i]);
                     epsilon_yy[i] = (matLambda_temp + matMu_temp) / (matMu_temp * (3 * matLambda_temp + 2 * matMu_temp)) * 
@@ -959,7 +951,7 @@ int main() {
     int MAX_EPOCH = 100;
     double MIN_LOSS = 1e-12;
     bool SUPERVISED_LEARNING = false;
-    std::string JSON_PATH = "/home/isabellaunix/DevelDA/singerDA/ConfigResult/result.json";       
+    std::string JSON_PATH = "/home/isabellaunix/DevelDA/singerDA/ConfigResult/result.json";     // SetBeforeSim    
 
     // spline parameters
     int64_t NR_CTRL_PTS = 8;  // in each direction 
@@ -988,7 +980,7 @@ int main() {
 
     // OPTIONAL .json input for easy change of params. no need to rebuild :) auszukommentieren, wenn nicht gebraucht.
     bool USERINPUT = true;
-    std::ifstream file("/home/isabellaunix/DevelDA/singerDA/ConfigResult/config.json");
+    std::ifstream file("/home/isabellaunix/DevelDA/singerDA/ConfigResult/config.json");     // SetBeforeSim
     if (!file) {
         std::cerr << "Could not open config.json\n";
         return 1;
@@ -1064,7 +1056,7 @@ int main() {
 
     // xml in net.template input<1>().eval(collPts.first)
     pugi::xml_document xml;
-    xml.load_file("/home/isabellaunix/DevelDA/singerDA/ConfigResult/mat.xml");
+    xml.load_file("/home/isabellaunix/DevelDA/singerDA/ConfigResult/mat.xml");      // SetBeforeSim
     net.template input<2>().from_xml(xml);
 
     // imposing body force f
