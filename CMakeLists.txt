@@ -36,6 +36,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     FetchContent_Declare(
       iganet_core
       GIT_REPOSITORY https://github.com/iganets/iganet.git
+      GIT_TAG main
     )
   else()  
     FetchContent_Declare(
@@ -59,6 +60,7 @@ endif()
 ########################################################################
 # Collect sources
 ########################################################################
+
 file(GLOB SOURCES src/*.cxx)
 
 foreach(source ${SOURCES})
@@ -72,5 +74,10 @@ foreach(source ${SOURCES})
 
   target_compile_options(${name} PRIVATE "-DIGANET_DATA_DIR=\"${PROJECT_SOURCE_DIR}/filedata/\"")
   target_link_libraries(${name} PRIVATE iganet::core)
+
+  target_include_directories(${name}
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+
   
 endforeach()
