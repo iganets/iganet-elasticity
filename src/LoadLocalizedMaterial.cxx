@@ -101,6 +101,8 @@ int main() {
 
     linear_elasticity_t net2(TFBC_SIDES, FORCE_SIDES, DIRI_SIDES, NR_CTRL_PTS, JSON_PATH);
 
+    net2.load("/home/isabellaunix/DevelDA/singerDA/ConfigResult/trained_iganet.pt");
+
     linear_elasticity_t net( // simulation parameters
         SUPERVISED_LEARNING, MAX_EPOCH, MIN_LOSS, solver_options, 
         TFBC_SIDES, FORCE_SIDES, DIRI_SIDES, NR_CTRL_PTS, JSON_PATH,
@@ -129,7 +131,7 @@ int main() {
     });
 
     // get  coefficients of  control points
-    torch::Tensor ctrlPtsCoeffs = net.template input<0>().as_tensor().slice(0, 0, NR_CTRL_PTS);
+    torch::Tensor ctrlPtsCoeffs = net2.template input<0>().as_tensor().slice(0, 0, NR_CTRL_PTS);
     nlohmann::json ctrlPtsCoeffs_j = nlohmann::json::array();
     for (int i = 0; i < NR_CTRL_PTS; ++i) {
         ctrlPtsCoeffs_j.push_back({ctrlPtsCoeffs[i].item<double>()});
@@ -210,7 +212,6 @@ int main() {
     // net.options().min_loss_rel_change(0);   // overwrite.
     
     // Train network ----------------------------------------------------------------------------------------------------------
-    net2.load("/home/isabellaunix/DevelDA/singerDA/ConfigResult/trained_iganet.pt");
     net2.eval();
     // std::cout << net2 << std::endl;
 
