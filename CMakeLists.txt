@@ -78,6 +78,5 @@ foreach(source ${SOURCES})
   target_include_directories(${name}
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src
   )
-
   
 endforeach()
