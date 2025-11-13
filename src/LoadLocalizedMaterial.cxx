@@ -99,6 +99,8 @@ int main() {
     using outputs_t = std::tuple<variable_t>;     
     using linear_elasticity_t = ElasticityForLocalizedMaterial<optimizer_t, inputs_t, outputs_t>;
 
+    linear_elasticity_t net2(TFBC_SIDES, FORCE_SIDES, DIRI_SIDES, NR_CTRL_PTS, JSON_PATH);
+
     linear_elasticity_t net( // simulation parameters
         SUPERVISED_LEARNING, MAX_EPOCH, MIN_LOSS, solver_options, 
         TFBC_SIDES, FORCE_SIDES, DIRI_SIDES, NR_CTRL_PTS, JSON_PATH,
@@ -119,20 +121,20 @@ int main() {
     // xml in net.template input<1>().eval(collPts.first)
     pugi::xml_document xml;
     xml.load_file("/home/isabellaunix/DevelDA/singerDA/ConfigResult/mat.xml");      // SetBeforeSim
-    net.template input<2>().from_xml(xml);
+    net2.template input<2>().from_xml(xml);
 
     // imposing body force f
-    net.template input<1>().transform([=](const std::array<real_t, 2> xi) {
+    net2.template input<1>().transform([=](const std::array<real_t, 2> xi) {
         return std::array<real_t, 2>{BODY_FORCE.first, BODY_FORCE.second};
     });
 
     // get  coefficients of  control points
-    torch::Tensor ctrlPtsCoeffs = net.template output<0>().as_tensor().slice(0, 0, NR_CTRL_PTS);
+    torch::Tensor ctrlPtsCoeffs = net.template input<0>().as_tensor().slice(0, 0, NR_CTRL_PTS);
     nlohmann::json ctrlPtsCoeffs_j = nlohmann::json::array();
     for (int i = 0; i < NR_CTRL_PTS; ++i) {
         ctrlPtsCoeffs_j.push_back({ctrlPtsCoeffs[i].item<double>()});
     }
-    net.appendToJsonFile("net_ctrlPtsCoeffs", ctrlPtsCoeffs_j);
+    net2.appendToJsonFile("net_ctrlPtsCoeffs", ctrlPtsCoeffs_j);
 
     // run through all DIRI_SIDES
     for (const auto& side : DIRI_SIDES) {
@@ -142,13 +144,13 @@ int main() {
 
         switch (sideNr) {
             case 1:
-                net.ref().boundary().side<1>().transform<1>(
+                net2.ref().boundary().side<1>().transform<1>(
                     [=](const std::array<real_t, 1> &xi) {
                         return std::array<real_t, 1>{xDispl};
                     },
                     std::array<iganet::short_t, 1>{0} 
                 );
-                net.ref().boundary().side<1>().transform<1>(
+                net2.ref().boundary().side<1>().transform<1>(
                     [=](const std::array<real_t, 1> &xi) {
                         return std::array<real_t, 1>{yDispl};
                     },
@@ -156,13 +158,13 @@ int main() {
                 );
                 break;
             case 2:
-                net.ref().boundary().side<2>().transform<1>(
+                net2.ref().boundary().side<2>().transform<1>(
                     [=](const std::array<real_t, 1> &xi) {
                         return std::array<real_t, 1>{xDispl};
                     },
                     std::array<iganet::short_t, 1>{0} 
                 );
-                net.ref().boundary().side<2>().transform<1>(
+                net2.ref().boundary().side<2>().transform<1>(
                     [=](const std::array<real_t, 1> &xi) {
                         return std::array<real_t, 1>{yDispl};
                     },
@@ -170,13 +172,13 @@ int main() {
                 );
                 break;
             case 3:
-                net.ref().boundary().side<3>().transform<1>(
+                net2.ref().boundary().side<3>().transform<1>(
                     [=](const std::array<real_t, 1> &xi) {
                         return std::array<real_t, 1>{xDispl};
                     },
                     std::array<iganet::short_t, 1>{0} 
                 );
-                net.ref().boundary().side<3>().transform<1>(
+                net2.ref().boundary().side<3>().transform<1>(
                     [=](const std::array<real_t, 1> &xi) {
                         return std::array<real_t, 1>{yDispl};
                     },
@@ -184,13 +186,13 @@ int main() {
                 );
                 break;
             case 4:
-                net.ref().boundary().side<4>().transform<1>(
+                net2.ref().boundary().side<4>().transform<1>(
                     [=](const std::array<real_t, 1> &xi) {
                         return std::array<real_t, 1>{xDispl};
                     },
                     std::array<iganet::short_t, 1>{0} 
                 );
-                net.ref().boundary().side<4>().transform<1>(
+                net2.ref().boundary().side<4>().transform<1>(
                     [=](const std::array<real_t, 1> &xi) {
                         return std::array<real_t, 1>{yDispl};
                     },
@@ -208,18 +210,14 @@ int main() {
     // net.options().min_loss_rel_change(0);   // overwrite.
     
     // Train network ----------------------------------------------------------------------------------------------------------
-    linear_elasticity_t net2( // simulation parameters
-        SUPERVISED_LEARNING, MAX_EPOCH, MIN_LOSS, solver_options, 
-        TFBC_SIDES, FORCE_SIDES, DIRI_SIDES, NR_CTRL_PTS, JSON_PATH);
-
     net2.load("/home/isabellaunix/DevelDA/singerDA/ConfigResult/trained_iganet.pt");
-
+    net2.eval();
     // std::cout << net2 << std::endl;
 
     // POSTPROCESSING ----------------------------------------------------------------------------------------------------------
     //  get  geometry and displacement as tensors
-    torch::Tensor geometryAsTensor = net.template input<0>().as_tensor();
-    torch::Tensor displacementAsTensor = net.template output<0>().as_tensor();
+    torch::Tensor geometryAsTensor = net2.template input<0>().as_tensor();
+    torch::Tensor displacementAsTensor = net2.template output<0>().as_tensor();
     
     // creating collection matrix for all  control points / displacements (iganet)
     gsMatrix<real_t> netCtrlPts(NR_CTRL_PTS * NR_CTRL_PTS, 2);
@@ -248,8 +246,8 @@ int main() {
     }
 
     // write data to  json file
-    net.appendToJsonFile("net_CtrlPts", displacedNetCtrlPts_j);
-    net.appendToJsonFile("net_Degree", DEGREE);
+    net2.appendToJsonFile("net_CtrlPts", displacedNetCtrlPts_j);
+    net2.appendToJsonFile("net_Degree", DEGREE);
     
     iganet::finalize();
     return 0;
