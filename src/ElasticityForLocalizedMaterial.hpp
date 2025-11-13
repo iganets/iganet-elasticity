@@ -76,12 +76,12 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
         bool SUPERVISED_LEARNING_;
 
     public:
-        // Constructor
+        // Constructor I
         template <typename... Args>
-        ElasticityForLocalizedMaterial(bool SUPERVISED_LEARNING, int MAX_EPOCH, double MIN_LOSS, const torch::optim::LBFGSOptions& solver_opts,                                          // nn options
+        ElasticityForLocalizedMaterial(bool SUPERVISED_LEARNING, int MAX_EPOCH, double MIN_LOSS, const torch::optim::LBFGSOptions& solver_opts,                             // nn options
                           std::vector<int> TFBC_SIDES, std::vector<std::tuple<int, double, double>> FORCE_SIDES, std::vector<std::tuple<int, double, double>> DIRI_SIDES,   // boundary conditions
-                          int64_t NR_CTRL_PTS, std::string JSON_PATH, std::vector<int64_t> &&layers,                                                                        // simulation/nn options
-                          std::vector<std::vector<std::any>> &&activations, Args &&...args)
+                          int64_t NR_CTRL_PTS, std::string JSON_PATH,                                                                                                       // simulation
+                          std::vector<int64_t> &&layers, std::vector<std::vector<std::any>> &&activations, Args &&...args)                                                  //nn options / inOutput shapes
             : Base(std::forward<std::vector<int64_t>>(layers),
                    std::forward<std::vector<std::vector<std::any>>>(activations),
                    std::forward<Args>(args)...),
@@ -90,11 +90,9 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                    NR_CTRL_PTS_(NR_CTRL_PTS), JSON_PATH_(std::move(JSON_PATH)), 
                    ref_(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)) {}
 
-        ElasticityForLocalizedMaterial(bool SUPERVISED_LEARNING, int MAX_EPOCH, double MIN_LOSS, const torch::optim::LBFGSOptions& solver_opts,                                          // nn options
-                          std::vector<int> TFBC_SIDES, std::vector<std::tuple<int, double, double>> FORCE_SIDES, std::vector<std::tuple<int, double, double>> DIRI_SIDES,   // boundary conditions
+        ElasticityForLocalizedMaterial(std::vector<int> TFBC_SIDES, std::vector<std::tuple<int, double, double>> FORCE_SIDES, std::vector<std::tuple<int, double, double>> DIRI_SIDES,   // boundary conditions
                           int64_t NR_CTRL_PTS, std::string JSON_PATH)
             : Base(),
-                   SUPERVISED_LEARNING_(SUPERVISED_LEARNING), MAX_EPOCH_(MAX_EPOCH), MIN_LOSS_(MIN_LOSS),
                    TFBC_SIDES_(TFBC_SIDES), FORCE_SIDES_(FORCE_SIDES), DIRI_SIDES_(DIRI_SIDES),
                    NR_CTRL_PTS_(NR_CTRL_PTS), JSON_PATH_(std::move(JSON_PATH)), 
                    ref_(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)) {}
@@ -776,7 +774,7 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                 // only consider BC loss if dirichlet BCs are applied
                 if (!DIRI_SIDES_.empty()) {
                     // add a BC weight for penalization of  training
-                    int bcWeight = 1e0;
+                    int bcWeight = 1e7;
                     // initialize bcLoss variable
                     bcLoss = torch::tensor(0.0);
 
