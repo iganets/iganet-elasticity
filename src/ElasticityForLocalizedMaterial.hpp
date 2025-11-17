@@ -851,13 +851,17 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
 
                 torch::Tensor epsilon_xx = torch::zeros({Jacobian[0]->size(0)});
                 torch::Tensor epsilon_yy = torch::zeros({Jacobian[0]->size(0)});
+                torch::Tensor epsilon_xy = torch::zeros({Jacobian[0]->size(0)});
                 torch::Tensor poisson_re = torch::zeros({Jacobian[0]->size(0)});
 
-                // create json object for  stresses
+                // create json object for  stresses and strains
                 nlohmann::json netVmStresses_j = nlohmann::json::array();
                 nlohmann::json netXStresses_j = nlohmann::json::array();
                 nlohmann::json netYStresses_j = nlohmann::json::array();
                 nlohmann::json netPoisson_j = nlohmann::json::array();
+                nlohmann::json netStrainXX_j = nlohmann::json::array();
+                nlohmann::json netStrainYY_j = nlohmann::json::array();
+                nlohmann::json netStrainXY_j = nlohmann::json::array();
 
                 auto mat = Base::template input<2>().eval(collPts_.first);
 
@@ -881,14 +885,19 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                         (sigma_xx[i] - matLambda_temp / (2 * (matLambda_temp + matMu_temp)) * sigma_yy[i]);
                     epsilon_yy[i] = (matLambda_temp + matMu_temp) / (matMu_temp * (3 * matLambda_temp + 2 * matMu_temp)) * 
                         (sigma_yy[i] - matLambda_temp / (2 * (matLambda_temp + matMu_temp)) * sigma_xx[i]);
+                    epsilon_xy[i] = sigma_xy[i] / (2 * matMu_temp);
 
                     // only valid for load in x-direction
                     poisson_re[i] = - epsilon_yy[i] / epsilon_xx[i];
                     
-                    // add  stresses to  json objects
+                    // add  stresses and strains to  json objects
                     netVmStresses_j.push_back({sigma_vm[i].item<double>()});
                     netXStresses_j.push_back({sigma_xx[i].item<double>()});
                     netYStresses_j.push_back({sigma_yy[i].item<double>()});
+
+                    netStrainXX_j.push_back({epsilon_xx[i].item<double>()});
+                    netStrainYY_j.push_back({epsilon_yy[i].item<double>()});
+                    netStrainXY_j.push_back({epsilon_xy[i].item<double>()});
                     // add  poisson ratio to  json object
                     netPoisson_j.push_back({poisson_re[i].item<double>()});
                 }
@@ -897,6 +906,9 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                 appendToJsonFile("net_VmStresses", netVmStresses_j);
                 appendToJsonFile("net_XStresses", netXStresses_j);
                 appendToJsonFile("net_YStresses", netYStresses_j);
+                appendToJsonFile("net_StrainsXX", netStrainXX_j);
+                appendToJsonFile("net_StrainsYY", netStrainYY_j);
+                appendToJsonFile("net_StrainsXY", netStrainXY_j);
                 appendToJsonFile("net_Poisson", netPoisson_j);
 
                 // CALCULATE THE NEW POSITION OF THE COLLPTS
