@@ -857,6 +857,7 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                 // create json object for  stresses and strains
                 nlohmann::json netVmStresses_j = nlohmann::json::array();
                 nlohmann::json netXStresses_j = nlohmann::json::array();
+                nlohmann::json netXYStresses_j = nlohmann::json::array();
                 nlohmann::json netYStresses_j = nlohmann::json::array();
                 nlohmann::json netPoisson_j = nlohmann::json::array();
                 nlohmann::json netStrainXX_j = nlohmann::json::array();
@@ -871,21 +872,19 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                     double matLambda_temp = mat(0)[i].template item<double>();
                     double matMu_temp     = mat(1)[i].template item<double>();
 
+                    // calculate  strains at  collocation points. $\varepsilon_{ij} = \frac{\partial u_i}{\partialx_j}$ $formerly: $\epsilon = 1/E \sigma = C^-1 : \sigma$
+                    epsilon_xx[i] = ux_x[i];
+                    epsilon_xy[i] = 0.5 * (ux_y[i] + uy_x[i]);
+                    epsilon_yy[i] = uy_y[i];
+
                     // calculate  stress values for all collocation points
-                    sigma_xx[i] = matLambda_temp * (ux_x[i] + uy_y[i]) + 2 * matMu_temp * ux_x[i];
-                    sigma_xy[i] = matMu_temp * (uy_x[i] + ux_y[i]);
-                    sigma_yy[i] = matLambda_temp * (ux_x[i] + uy_y[i]) + 2 * matMu_temp * uy_y[i];
+                    sigma_xx[i] = matLambda_temp * (epsilon_xx[i] + epsilon_yy[i]) + 2 * matMu_temp * epsilon_xx[i];
+                    sigma_xy[i] = matMu_temp * 2 * epsilon_xy[i];
+                    sigma_yy[i] = matLambda_temp * (epsilon_xx[i] + epsilon_yy[i]) + 2 * matMu_temp * epsilon_yy[i];
                     
                     // calculate von mises stress at  collocation points
                     sigma_vm[i] = sqrt(sigma_xx[i] * sigma_xx[i] + sigma_yy[i] * sigma_yy[i] 
                                     - sigma_xx[i] * sigma_yy[i] + sigma_xy[i] * sigma_xy[i] * 3);
-                    
-                    // calculate  strains at  collocation points. $\epsilon = 1/E \sigma = C^-1 : \sigma$
-                    epsilon_xx[i] = (matLambda_temp + matMu_temp) / (matMu_temp * (3 * matLambda_temp + 2 * matMu_temp)) * 
-                        (sigma_xx[i] - matLambda_temp / (2 * (matLambda_temp + matMu_temp)) * sigma_yy[i]);
-                    epsilon_yy[i] = (matLambda_temp + matMu_temp) / (matMu_temp * (3 * matLambda_temp + 2 * matMu_temp)) * 
-                        (sigma_yy[i] - matLambda_temp / (2 * (matLambda_temp + matMu_temp)) * sigma_xx[i]);
-                    epsilon_xy[i] = sigma_xy[i] / (2 * matMu_temp);
 
                     // only valid for load in x-direction
                     poisson_re[i] = - epsilon_yy[i] / epsilon_xx[i];
@@ -893,6 +892,7 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                     // add  stresses and strains to  json objects
                     netVmStresses_j.push_back({sigma_vm[i].item<double>()});
                     netXStresses_j.push_back({sigma_xx[i].item<double>()});
+                    netXYStresses_j.push_back({sigma_xy[i].item<double>()});
                     netYStresses_j.push_back({sigma_yy[i].item<double>()});
 
                     netStrainXX_j.push_back({epsilon_xx[i].item<double>()});
@@ -905,7 +905,9 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                 // write  stresses and poisson ratios to  json file
                 appendToJsonFile("net_VmStresses", netVmStresses_j);
                 appendToJsonFile("net_XStresses", netXStresses_j);
+                appendToJsonFile("net_XYStresses", netXYStresses_j);
                 appendToJsonFile("net_YStresses", netYStresses_j);
+
                 appendToJsonFile("net_StrainsXX", netStrainXX_j);
                 appendToJsonFile("net_StrainsYY", netStrainYY_j);
                 appendToJsonFile("net_StrainsXY", netStrainXY_j);
