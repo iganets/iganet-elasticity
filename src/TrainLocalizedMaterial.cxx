@@ -43,7 +43,7 @@ int main() {
                                         line_search_fn("strong_wolfe");
 
     // OPTIONAL .json input for easy change of params.
-    std::string choice = "other";       // 'json' for json input.
+    std::string choice = "json";       // 'json' for json input.
 
     if (choice == "json") {
         std::ifstream file("/home/isabellaunix/DevelDA/singerDA/ConfigResult/config.json");     // SetBeforeSim
@@ -126,14 +126,6 @@ int main() {
     net.template input<1>().transform([=](const std::array<real_t, 2> xi) {
         return std::array<real_t, 2>{BODY_FORCE.first, BODY_FORCE.second};
     });
-
-    // get  coefficients of  control points
-    torch::Tensor ctrlPtsCoeffs = net.template output<0>().as_tensor().slice(0, 0, NR_CTRL_PTS);
-    nlohmann::json ctrlPtsCoeffs_j = nlohmann::json::array();
-    for (int i = 0; i < NR_CTRL_PTS; ++i) {
-        ctrlPtsCoeffs_j.push_back({ctrlPtsCoeffs[i].item<double>()});
-    }
-    net.appendToJsonFile("net_ctrlPtsCoeffs", ctrlPtsCoeffs_j);
 
     // run through all DIRI_SIDES
     for (const auto& side : DIRI_SIDES) {
@@ -224,6 +216,7 @@ int main() {
         << " seconds\n";
 
     // PostProcessing ----------------------------------------------------------------------------------------------------------
+    net.PostProc();     // rausschreiben der postprocessing größen
     net.save("/home/isabellaunix/DevelDA/singerDA/ConfigResult/trained_iganet.pt");     // save the state of the trained network to evaluate later
 
     //  get  geometry and displacement as tensors
@@ -257,7 +250,7 @@ int main() {
     }
 
     // write data to  json file
-    net.appendToJsonFile("net_CtrlPts", displacedNetCtrlPts_j);
+    net.appendToJsonFile("net_CtrlPts", displacedNetCtrlPts_j);     // deformed
     net.appendToJsonFile("net_Degree", DEGREE);
     
     iganet::finalize();

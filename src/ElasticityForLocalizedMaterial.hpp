@@ -104,7 +104,7 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
         auto &ref() { return ref_; }                                      // Returns a non-constant reference to  reference solution
     
         // Writes data to JSON file
-        void appendToJsonFile(const std::string& key, const nlohmann::json& data) {             
+        void appendToJsonFile(const std::string& key, const nlohmann::json& data) const{             
             nlohmann::json jsonData;        // create json object
 
             // read JSON data from file
@@ -826,134 +826,171 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                 throw std::runtime_error("Invalid value for SUPERVISED_LEARNING_ (should be true/false)");
             }
 
-            // *** POSTPROCESSING PREPARATION - WRITING DATA TO JSON FILE
-
-            // only calculate this at  end of  simulation
-            if ((epoch == MAX_EPOCH_ - 1) || (totalLoss.item<double>() <= MIN_LOSS_)) {
-                
-                // STRESS CALCULATION
-
-                // calculate  Jacobian of  displacements (u) at  collocation points
-                auto Jacobian = Base::template output<0>().ijac(Base::template input<0>(), collPts_.first,
-                                var_knot_indices_, var_coeff_indices_,
-                                G_knot_indices_, G_coeff_indices_);
-                
-                auto ux_x = Jacobian(0,0);
-                auto ux_y = Jacobian(0,1);
-                auto uy_x = Jacobian(1,0);
-                auto uy_y = Jacobian(1,1);
-
-                // allocate  stress tensor
-                torch::Tensor sigma_xx = torch::zeros({Jacobian[0]->size(0)});
-                torch::Tensor sigma_xy = torch::zeros({Jacobian[0]->size(0)});
-                torch::Tensor sigma_yy = torch::zeros({Jacobian[0]->size(0)}); 
-                torch::Tensor sigma_vm = torch::zeros({Jacobian[0]->size(0)});   
-
-                torch::Tensor epsilon_xx = torch::zeros({Jacobian[0]->size(0)});
-                torch::Tensor epsilon_yy = torch::zeros({Jacobian[0]->size(0)});
-                torch::Tensor epsilon_xy = torch::zeros({Jacobian[0]->size(0)});
-                torch::Tensor poisson_re = torch::zeros({Jacobian[0]->size(0)});
-
-                // create json object for  stresses and strains
-                nlohmann::json netVmStresses_j = nlohmann::json::array();
-                nlohmann::json netXStresses_j = nlohmann::json::array();
-                nlohmann::json netXYStresses_j = nlohmann::json::array();
-                nlohmann::json netYStresses_j = nlohmann::json::array();
-                nlohmann::json netPoisson_j = nlohmann::json::array();
-                nlohmann::json netStrainXX_j = nlohmann::json::array();
-                nlohmann::json netStrainYY_j = nlohmann::json::array();
-                nlohmann::json netStrainXY_j = nlohmann::json::array();
-
-                auto mat = Base::template input<2>().eval(collPts_.first);
-
-                // calculate  stress tensor
-                for (int i = 0; i < Jacobian[0]->size(0); ++i) {        // 64 it über gesamte domain
-
-                    double matLambda_temp = mat(0)[i].template item<double>();
-                    double matMu_temp     = mat(1)[i].template item<double>();
-
-                    // calculate  strains at  collocation points. $\varepsilon_{ij} = \frac{\partial u_i}{\partialx_j}$ $formerly: $\epsilon = 1/E \sigma = C^-1 : \sigma$
-                    epsilon_xx[i] = ux_x[i];
-                    epsilon_xy[i] = 0.5 * (ux_y[i] + uy_x[i]);
-                    epsilon_yy[i] = uy_y[i];
-
-                    // calculate  stress values for all collocation points
-                    sigma_xx[i] = matLambda_temp * (epsilon_xx[i] + epsilon_yy[i]) + 2 * matMu_temp * epsilon_xx[i];
-                    sigma_xy[i] = matMu_temp * 2 * epsilon_xy[i];
-                    sigma_yy[i] = matLambda_temp * (epsilon_xx[i] + epsilon_yy[i]) + 2 * matMu_temp * epsilon_yy[i];
-                    
-                    // calculate von mises stress at  collocation points
-                    sigma_vm[i] = sqrt(sigma_xx[i] * sigma_xx[i] + sigma_yy[i] * sigma_yy[i] 
-                                    - sigma_xx[i] * sigma_yy[i] + sigma_xy[i] * sigma_xy[i] * 3);
-
-                    // only valid for load in x-direction
-                    poisson_re[i] = - epsilon_yy[i] / epsilon_xx[i];
-                    
-                    // add  stresses and strains to  json objects
-                    netVmStresses_j.push_back({sigma_vm[i].item<double>()});
-                    netXStresses_j.push_back({sigma_xx[i].item<double>()});
-                    netXYStresses_j.push_back({sigma_xy[i].item<double>()});
-                    netYStresses_j.push_back({sigma_yy[i].item<double>()});
-
-                    netStrainXX_j.push_back({epsilon_xx[i].item<double>()});
-                    netStrainYY_j.push_back({epsilon_yy[i].item<double>()});
-                    netStrainXY_j.push_back({epsilon_xy[i].item<double>()});
-                    // add  poisson ratio to  json object
-                    netPoisson_j.push_back({poisson_re[i].item<double>()});
-                }
-
-                // write  stresses and poisson ratios to  json file
-                appendToJsonFile("net_VmStresses", netVmStresses_j);
-                appendToJsonFile("net_XStresses", netXStresses_j);
-                appendToJsonFile("net_XYStresses", netXYStresses_j);
-                appendToJsonFile("net_YStresses", netYStresses_j);
-
-                appendToJsonFile("net_StrainsXX", netStrainXX_j);
-                appendToJsonFile("net_StrainsYY", netStrainYY_j);
-                appendToJsonFile("net_StrainsXY", netStrainXY_j);
-                appendToJsonFile("net_Poisson", netPoisson_j);
-
-                // CALCULATE THE NEW POSITION OF THE COLLPTS
-
-                // create a tensor of  collocation points
-                torch::Tensor collPtsFirstAsTensor = torch::stack(
-                    {std::get<0>(collPts_.first), std::get<1>(collPts_.first)}, 1);
-                auto displacementOfCollPts = Base::template output<0>().eval(collPts_.first);
-                torch::Tensor displacementAsTensor = torch::stack(
-                    {*(displacementOfCollPts[0]), *(displacementOfCollPts[1]) }, 1);
-
-                // create json objects for  collocation points' reference and displaced position
-                nlohmann::json collPtsFirst_j = nlohmann::json::array();
-                nlohmann::json collPtsFirstDispl_j = nlohmann::json::array();
-                for (int i = 0; i < collPtsFirstAsTensor.size(0); ++i) {
-                    // reference position of  collocation points
-                    collPtsFirst_j.push_back({collPtsFirstAsTensor[i][0].item<double>(), 
-                                            collPtsFirstAsTensor[i][1].item<double>()});
-                    // new position of  collocation points
-                    collPtsFirstDispl_j.push_back({collPtsFirstAsTensor[i][0].item<double>() + 
-                                                displacementAsTensor[i][0].item<double>(), 
-                                                collPtsFirstAsTensor[i][1].item<double>() + 
-                                                displacementAsTensor[i][1].item<double>()});
-                }
-                // write  collocation points' original position to  json file
-                appendToJsonFile("net_collPtsFirstAsTensor", collPtsFirst_j);
-                // write  collocation points' new position to  json file
-                appendToJsonFile("net_collPtsFirstAfterDisplacementAsTensor", collPtsFirstDispl_j);
-
-                // WRITING DIVERGENCE OF THE STRESS TENSOR TO JSON FILE
-
-                nlohmann::json netDivergenceX_j = nlohmann::json::array();
-                nlohmann::json netDivergenceY_j = nlohmann::json::array();
-
-                for (int i = 0; i < divStressX.size(0); ++i) {
-                    netDivergenceX_j.push_back({divStressX[i].item<double>()});
-                    netDivergenceY_j.push_back({divStressY[i].item<double>()});
-                }
-
-                // write  divergence of  stress tensor to  json file
-                appendToJsonFile("net_DivergenceX", netDivergenceX_j);
-                appendToJsonFile("net_DivergenceY", netDivergenceY_j);
-            }
             return totalLoss;
+        }
+
+        // *** POSTPROCESSING PREPARATION - WRITING DATA TO JSON FILE
+        // call this after train() / eval()
+        void PostProc() const{
+
+            // Hesse - calculation of  second derivatives (Hessian Matrix) of  displacements (u)
+            auto Hessian =  Base::template output<0>().ihess(Base::template input<0>(), interiorCollPts_.first, 
+                            var_knot_indices_interior_, var_coeff_indices_interior_,
+                            G_knot_indices_interior_, G_coeff_indices_interior_);
+
+            auto matINT = Base::template input<2>().eval(interiorCollPts_.first);
+
+            // partial derivatives of  displacements (u) 
+            auto& ux_xx = Hessian(0,0,0);
+            auto& ux_xy = Hessian(0,1,0);
+            auto& ux_yx = Hessian(1,0,0);
+            auto& ux_yy = Hessian(1,1,0);
+
+            auto& uy_xx = Hessian(0,0,1);
+            auto& uy_xy = Hessian(0,1,1);
+            auto& uy_yx = Hessian(1,0,1);
+            auto& uy_yy = Hessian(1,1,1);
+
+            // pre-allocation of  results
+            torch::Tensor divStressX = torch::zeros({Hessian(0,0,0).size(0)});
+            torch::Tensor divStressY = torch::zeros({Hessian(0,0,1).size(0)});
+
+            // calculation of  divergence of  stress tensor, this is what we're trying to minimize
+            for (int i = 0; i < Hessian(0,0,0).size(0); ++i) {      // 36 it über interior 
+
+                double matLambda_temp = matINT(0)[i].template item<double>();
+                double matMu_temp     = matINT(1)[i].template item<double>();
+
+                // x-direction
+                divStressX[i] = (matLambda_temp + 2 * matMu_temp) * ux_xx[i] + 
+                                matMu_temp* ux_yy[i] + (matLambda_temp + matMu_temp) * uy_xy[i];
+
+                // y-direction
+                divStressY[i] = matMu_temp * uy_xx[i] + (matLambda_temp + 2 * matMu_temp) * uy_yy[i] + 
+                                (matLambda_temp + matMu_temp) * ux_xy[i];
+                
+            }
+
+            // STRESS CALCULATION
+            // calculate  Jacobian of  displacements (u) at  collocation points
+            auto Jacobian = Base::template output<0>().ijac(Base::template input<0>(), collPts_.first,
+                            var_knot_indices_, var_coeff_indices_,
+                            G_knot_indices_, G_coeff_indices_);
+            
+            auto ux_x = Jacobian(0,0);
+            auto ux_y = Jacobian(0,1);
+            auto uy_x = Jacobian(1,0);
+            auto uy_y = Jacobian(1,1);
+
+            // allocate  stress tensor
+            torch::Tensor sigma_xx = torch::zeros({Jacobian[0]->size(0)});
+            torch::Tensor sigma_xy = torch::zeros({Jacobian[0]->size(0)});
+            torch::Tensor sigma_yy = torch::zeros({Jacobian[0]->size(0)}); 
+            torch::Tensor sigma_vm = torch::zeros({Jacobian[0]->size(0)});   
+
+            torch::Tensor epsilon_xx = torch::zeros({Jacobian[0]->size(0)});
+            torch::Tensor epsilon_yy = torch::zeros({Jacobian[0]->size(0)});
+            torch::Tensor epsilon_xy = torch::zeros({Jacobian[0]->size(0)});
+            torch::Tensor poisson_re = torch::zeros({Jacobian[0]->size(0)});
+
+            // create json object for  stresses and strains
+            nlohmann::json netVmStresses_j = nlohmann::json::array();
+            nlohmann::json netXStresses_j = nlohmann::json::array();
+            nlohmann::json netXYStresses_j = nlohmann::json::array();
+            nlohmann::json netYStresses_j = nlohmann::json::array();
+            nlohmann::json netPoisson_j = nlohmann::json::array();
+            nlohmann::json netStrainXX_j = nlohmann::json::array();
+            nlohmann::json netStrainYY_j = nlohmann::json::array();
+            nlohmann::json netStrainXY_j = nlohmann::json::array();
+
+            auto mat = Base::template input<2>().eval(collPts_.first);
+
+            // calculate  stress tensor
+            for (int i = 0; i < Jacobian[0]->size(0); ++i) {        // 64 it über gesamte domain
+
+                double matLambda_temp = mat(0)[i].template item<double>();
+                double matMu_temp     = mat(1)[i].template item<double>();
+
+                // calculate  strains at  collocation points. $\varepsilon_{ij} = \frac{\partial u_i}{\partialx_j}$ $formerly: $\epsilon = 1/E \sigma = C^-1 : \sigma$
+                epsilon_xx[i] = ux_x[i];
+                epsilon_xy[i] = 0.5 * (ux_y[i] + uy_x[i]);
+                epsilon_yy[i] = uy_y[i];
+
+                // calculate  stress values for all collocation points
+                sigma_xx[i] = matLambda_temp * (epsilon_xx[i] + epsilon_yy[i]) + 2 * matMu_temp * epsilon_xx[i];
+                sigma_xy[i] = matMu_temp * 2 * epsilon_xy[i];
+                sigma_yy[i] = matLambda_temp * (epsilon_xx[i] + epsilon_yy[i]) + 2 * matMu_temp * epsilon_yy[i];
+                
+                // calculate von mises stress at  collocation points
+                sigma_vm[i] = sqrt(sigma_xx[i] * sigma_xx[i] + sigma_yy[i] * sigma_yy[i] 
+                                - sigma_xx[i] * sigma_yy[i] + sigma_xy[i] * sigma_xy[i] * 3);
+
+                // only valid for load in x-direction
+                poisson_re[i] = - epsilon_yy[i] / epsilon_xx[i];
+                
+                // add  stresses and strains to  json objects
+                netVmStresses_j.push_back({sigma_vm[i].item<double>()});
+                netXStresses_j.push_back({sigma_xx[i].item<double>()});
+                netXYStresses_j.push_back({sigma_xy[i].item<double>()});
+                netYStresses_j.push_back({sigma_yy[i].item<double>()});
+
+                netStrainXX_j.push_back({epsilon_xx[i].item<double>()});
+                netStrainYY_j.push_back({epsilon_yy[i].item<double>()});
+                netStrainXY_j.push_back({epsilon_xy[i].item<double>()});
+                // add  poisson ratio to  json object
+                netPoisson_j.push_back({poisson_re[i].item<double>()});
+            }
+
+            // write  stresses and poisson ratios to  json file
+            appendToJsonFile("net_VmStresses", netVmStresses_j);
+            appendToJsonFile("net_XStresses", netXStresses_j);
+            appendToJsonFile("net_XYStresses", netXYStresses_j);
+            appendToJsonFile("net_YStresses", netYStresses_j);
+
+            appendToJsonFile("net_StrainsXX", netStrainXX_j);
+            appendToJsonFile("net_StrainsYY", netStrainYY_j);
+            appendToJsonFile("net_StrainsXY", netStrainXY_j);
+            appendToJsonFile("net_Poisson", netPoisson_j);
+
+            // CALCULATE THE NEW POSITION OF THE COLLPTS
+
+            // create a tensor of  collocation points
+            torch::Tensor collPtsFirstAsTensor = torch::stack(
+                {std::get<0>(collPts_.first), std::get<1>(collPts_.first)}, 1);
+            auto displacementOfCollPts = Base::template output<0>().eval(collPts_.first);
+            torch::Tensor displacementAsTensor = torch::stack(
+                {*(displacementOfCollPts[0]), *(displacementOfCollPts[1]) }, 1);
+
+            // create json objects for  collocation points' reference and displaced position
+            nlohmann::json collPtsFirst_j = nlohmann::json::array();
+            nlohmann::json collPtsFirstDispl_j = nlohmann::json::array();
+            for (int i = 0; i < collPtsFirstAsTensor.size(0); ++i) {
+                // reference position of  collocation points
+                collPtsFirst_j.push_back({collPtsFirstAsTensor[i][0].item<double>(), 
+                                        collPtsFirstAsTensor[i][1].item<double>()});
+                // new position of  collocation points
+                collPtsFirstDispl_j.push_back({collPtsFirstAsTensor[i][0].item<double>() + 
+                                            displacementAsTensor[i][0].item<double>(), 
+                                            collPtsFirstAsTensor[i][1].item<double>() + 
+                                            displacementAsTensor[i][1].item<double>()});
+            }
+            // write  collocation points' original position to  json file
+            appendToJsonFile("net_collPtsFirstAsTensor", collPtsFirst_j);
+            // write  collocation points' new position to  json file
+            appendToJsonFile("net_collPtsFirstAfterDisplacementAsTensor", collPtsFirstDispl_j);
+
+            // WRITING DIVERGENCE OF THE STRESS TENSOR TO JSON FILE
+
+            nlohmann::json netDivergenceX_j = nlohmann::json::array();
+            nlohmann::json netDivergenceY_j = nlohmann::json::array();
+
+            for (int i = 0; i < divStressX.size(0); ++i) {
+                netDivergenceX_j.push_back({divStressX[i].item<double>()});
+                netDivergenceY_j.push_back({divStressY[i].item<double>()});
+            }
+
+            // write  divergence of  stress tensor to  json file
+            appendToJsonFile("net_DivergenceX", netDivergenceX_j);
+            appendToJsonFile("net_DivergenceY", netDivergenceY_j);
         }
 };

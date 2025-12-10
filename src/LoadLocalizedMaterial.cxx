@@ -103,22 +103,22 @@ int main() {
 
     net2.load("/home/isabellaunix/DevelDA/singerDA/ConfigResult/trained_iganet.pt");
 
-    linear_elasticity_t net( // simulation parameters
-        SUPERVISED_LEARNING, MAX_EPOCH, MIN_LOSS, solver_options, 
-        TFBC_SIDES, FORCE_SIDES, DIRI_SIDES, NR_CTRL_PTS, JSON_PATH,
-        // Number of neurons per layer
-        {25, 25},
-        // Activation functions
-        {{iganet::activation::sigmoid},
-            {iganet::activation::sigmoid},
-            {iganet::activation::none}},
-        // Number of B-spline coefficients of input in inputs_t
-        std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS),
-                   iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS),
-                   iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)),
-        // Number of B-spline coefficients of output in outputs_t
-        std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS))
-    );
+    // linear_elasticity_t net( // simulation parameters
+    //     SUPERVISED_LEARNING, MAX_EPOCH, MIN_LOSS, solver_options, 
+    //     TFBC_SIDES, FORCE_SIDES, DIRI_SIDES, NR_CTRL_PTS, JSON_PATH,
+    //     // Number of neurons per layer
+    //     {25, 25},
+    //     // Activation functions
+    //     {{iganet::activation::sigmoid},
+    //         {iganet::activation::sigmoid},
+    //         {iganet::activation::none}},
+    //     // Number of B-spline coefficients of input in inputs_t
+    //     std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS),
+    //                iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS),
+    //                iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)),
+    //     // Number of B-spline coefficients of output in outputs_t
+    //     std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS))
+    // );
 
     // xml in net.template input<1>().eval(collPts.first)
     pugi::xml_document xml;
@@ -129,14 +129,6 @@ int main() {
     net2.template input<1>().transform([=](const std::array<real_t, 2> xi) {
         return std::array<real_t, 2>{BODY_FORCE.first, BODY_FORCE.second};
     });
-
-    // get  coefficients of  control points
-    torch::Tensor ctrlPtsCoeffs = net2.template input<0>().as_tensor().slice(0, 0, NR_CTRL_PTS);
-    nlohmann::json ctrlPtsCoeffs_j = nlohmann::json::array();
-    for (int i = 0; i < NR_CTRL_PTS; ++i) {
-        ctrlPtsCoeffs_j.push_back({ctrlPtsCoeffs[i].item<double>()});
-    }
-    net2.appendToJsonFile("net_ctrlPtsCoeffs", ctrlPtsCoeffs_j);
 
     // run through all DIRI_SIDES
     for (const auto& side : DIRI_SIDES) {
@@ -206,11 +198,13 @@ int main() {
         }
     }
     
-    // Train network ----------------------------------------------------------------------------------------------------------
+    // EVAL NETWORK ----------------------------------------------------------------------------------------------------------
     net2.eval();
-    // std::cout << net2 << std::endl;
 
     // POSTPROCESSING ----------------------------------------------------------------------------------------------------------
+    net2.epoch(0);      // um indizes zudefinieren. siehe func epoch
+    net2.PostProc();    // rausschreiben der postprocessing größen
+
     //  get  geometry and displacement as tensors
     torch::Tensor geometryAsTensor = net2.template input<0>().as_tensor();
     torch::Tensor displacementAsTensor = net2.template output<0>().as_tensor();
