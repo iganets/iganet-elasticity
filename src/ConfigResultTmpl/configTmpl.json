@@ -1,0 +1,30 @@
+{
+  "simulation": {
+    "max_epoch": 100,
+    "min_loss": 5e-8,
+    "supervised_learning": false,
+    "json_path": "/home/isabellaunix/DevelDA/singerDA/ConfigResult/result.json"
+  },
+  "spline": {
+    "nr_ctrl_pts": 8,
+    "degree": 4
+  },
+  "boundary_conditions": {
+    "force_sides": [
+      [2, 100.0, 0.0]
+    ],
+    "diri_sides": [
+      [1, 0.0, 0.0]
+    ],
+    "tfbc_sides": [3,4]
+  },
+  "body_force":[0, 0],
+
+  "matlab": {
+    "s1": 0,
+    "s2_diri": [0.5, 0],
+    "s3": 0,
+    "s4": 0,
+    "s2_neum": [100, 0.0]
+  }
+}
