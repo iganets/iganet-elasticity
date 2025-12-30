@@ -210,14 +210,14 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                     Base::template input<1>().template find_coeff_indices<iganet::functionspace::interior>(var_knot_indices_interior_);
 
                 // ---- mat ----- mat_
-                // mat_knot_indices_ =
-                //     Base::template input<2>().template find_knot_indices<iganet::functionspace::interior>(collPts_.first);
-                // mat_coeff_indices_ =
-                //     Base::template input<2>().template find_coeff_indices<iganet::functionspace::interior>(mat_knot_indices_);
-                // mat_knot_indices_interior_ =
-                //     Base::template input<2>().template find_knot_indices<iganet::functionspace::interior>(interiorCollPts_.first);
-                // mat_coeff_indices_interior_ =
-                //     Base::template input<2>().template find_coeff_indices<iganet::functionspace::interior>(mat_knot_indices_interior_);
+                mat_knot_indices_ =
+                    Base::template input<2>().template find_knot_indices<iganet::functionspace::interior>(collPts_.first);
+                mat_coeff_indices_ =
+                    Base::template input<2>().template find_coeff_indices<iganet::functionspace::interior>(mat_knot_indices_);
+                mat_knot_indices_interior_ =
+                    Base::template input<2>().template find_knot_indices<iganet::functionspace::interior>(interiorCollPts_.first);
+                mat_coeff_indices_interior_ =
+                    Base::template input<2>().template find_coeff_indices<iganet::functionspace::interior>(mat_knot_indices_interior_);
                                 
                 // // --- u_ --- sol vorher bitte deklarieren
                 // u_knot_indices_ =
@@ -617,7 +617,23 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
             torch::Tensor divStressX = torch::zeros({Hessian(0,0,0).size(0)});
             torch::Tensor divStressY = torch::zeros({Hessian(0,0,1).size(0)});
 
-            // calculation of  divergence of  stress tensor, this is what we're trying to minimize
+            auto Jacobian_div1 = Base::template output<0>().ijac(Base::template input<0>(), interiorCollPts_.first,         //G, xi, ?knot, ?coef, Gknot, Gcoef. ijac=J(?)*J(G)^T
+                                 var_knot_indices_interior_, var_coeff_indices_interior_,
+                                 G_knot_indices_interior_, G_coeff_indices_interior_);
+                auto ux_x = Jacobian_div1(0,0);         // og *Jacobian_Nbdr[0];      // all sizes [12] so  tf boundaries
+                auto ux_y = Jacobian_div1(0,1);
+                auto uy_x = Jacobian_div1(1,0);
+                auto uy_y = Jacobian_div1(1,1);
+
+            auto Jacobian_mat = Base::template input<2>().ijac(Base::template input<0>(), interiorCollPts_.first,         //G, xi, ?knot, ?coef, Gknot, Gcoef. ijac=J(?)*J(G)^T
+                                 mat_knot_indices_interior_, mat_coeff_indices_interior_,
+                                 G_knot_indices_interior_, G_coeff_indices_interior_);
+                auto Ml_x = Jacobian_mat(0,0);         // og *Jacobian_Nbdr[0];      // all sizes [12] so  tf boundaries
+                auto Ml_y = Jacobian_mat(0,1);
+                auto Mm_x = Jacobian_mat(1,0);
+                auto Mm_y = Jacobian_mat(1,1);
+
+            // calculation of  DIV STRESS of  stress tensor, this is what we're trying to minimize
             for (int i = 0; i < Hessian(0,0,0).size(0); ++i) {      // 36 it über interior 
 
                 double matLambda_temp = mat(0)[i].template item<double>();
@@ -625,11 +641,13 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
 
                 // x-direction
                 divStressX[i] = (matLambda_temp + 2 * matMu_temp) * ux_xx[i] + 
-                                matMu_temp* ux_yy[i] + (matLambda_temp + matMu_temp) * uy_xy[i];
+                                matMu_temp* ux_yy[i] + (matLambda_temp + matMu_temp) * uy_xy[i] +
+                                Ml_x[i] * (ux_x[i] + uy_y[i]) + 2 * Mm_x[i] * (ux_x[i]) + Mm_y[i] * (ux_y[i] + uy_x[i]);
 
                 // y-direction
                 divStressY[i] = matMu_temp * uy_xx[i] + (matLambda_temp + 2 * matMu_temp) * uy_yy[i] + 
-                                (matLambda_temp + matMu_temp) * ux_xy[i];
+                                (matLambda_temp + matMu_temp) * ux_xy[i] + 
+                                Ml_y[i] * (ux_x[i] + uy_y[i]) + Mm_x[i] * (uy_x[i] + ux_y[i]) + 2 * Mm_y[i] * (uy_y[i]);
                 
             }
             
@@ -855,7 +873,23 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
             torch::Tensor divStressX = torch::zeros({Hessian(0,0,0).size(0)});
             torch::Tensor divStressY = torch::zeros({Hessian(0,0,1).size(0)});
 
-            // calculation of  divergence of  stress tensor, this is what we're trying to minimize
+            auto Jacobian_div2 = Base::template output<0>().ijac(Base::template input<0>(), interiorCollPts_.first,         //G, xi, ?knot, ?coef, Gknot, Gcoef. ijac=J(?)*J(G)^T
+                                 var_knot_indices_interior_, var_coeff_indices_interior_,
+                                 G_knot_indices_interior_, G_coeff_indices_interior_);
+                auto ux_x_div2 = Jacobian_div2(0,0);         // og *Jacobian_Nbdr[0];      // all sizes [12] so  tf boundaries
+                auto ux_y_div2 = Jacobian_div2(0,1);
+                auto uy_x_div2 = Jacobian_div2(1,0);
+                auto uy_y_div2 = Jacobian_div2(1,1);
+
+            auto Jacobian_mat = Base::template input<2>().ijac(Base::template input<0>(), interiorCollPts_.first,         //G, xi, ?knot, ?coef, Gknot, Gcoef. ijac=J(?)*J(G)^T
+                                 mat_knot_indices_interior_, mat_coeff_indices_interior_,
+                                 G_knot_indices_interior_, G_coeff_indices_interior_);
+                auto Ml_x = Jacobian_mat(0,0);         // og *Jacobian_Nbdr[0];      // all sizes [12] so  tf boundaries
+                auto Ml_y = Jacobian_mat(0,1);
+                auto Mm_x = Jacobian_mat(1,0);
+                auto Mm_y = Jacobian_mat(1,1);
+
+            // calculation of DIV STRESS divergence of  stress tensor
             for (int i = 0; i < Hessian(0,0,0).size(0); ++i) {      // 36 it über interior 
 
                 double matLambda_temp = matINT(0)[i].template item<double>();
@@ -863,11 +897,13 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
 
                 // x-direction
                 divStressX[i] = (matLambda_temp + 2 * matMu_temp) * ux_xx[i] + 
-                                matMu_temp* ux_yy[i] + (matLambda_temp + matMu_temp) * uy_xy[i];
+                                matMu_temp* ux_yy[i] + (matLambda_temp + matMu_temp) * uy_xy[i] +
+                                Ml_x[i] * (ux_x_div2[i] + uy_y_div2[i]) + 2 * Mm_x[i] * (ux_x_div2[i]) + Mm_y[i] * (ux_y_div2[i] + uy_x_div2[i]);
 
                 // y-direction
                 divStressY[i] = matMu_temp * uy_xx[i] + (matLambda_temp + 2 * matMu_temp) * uy_yy[i] + 
-                                (matLambda_temp + matMu_temp) * ux_xy[i];
+                                (matLambda_temp + matMu_temp) * ux_xy[i] + 
+                                Ml_y[i] * (ux_x_div2[i] + uy_y_div2[i]) + Mm_x[i] * (uy_x_div2[i] + ux_y_div2[i]) + 2 * Mm_y[i] * (uy_y_div2[i]);
                 
             }
 
