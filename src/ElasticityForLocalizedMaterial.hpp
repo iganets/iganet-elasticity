@@ -663,15 +663,37 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
 
             // *** Loss values
             // UNSUPERVISED LEARNING (default)
-            if (SUPERVISED_LEARNING_ == false) {
 
-                // create command line output variable for all  different losses
-                std::ostringstream singleLossOutput;
+            // create command line output variable for all  different losses
+            std::ostringstream singleLossOutput;
+                
+                if (SUPERVISED_LEARNING_ == true) {
+                    // preprocess  outputs for comparison with  matlab solution
+                    torch::Tensor modifiedOutputs = outputs * 1.0;
+                
+                    // create netDisplacements_ from slices of modifiedOutputs
+                    torch::Tensor netDisplacements_ = torch::stack({
+                        modifiedOutputs.slice(0, 0, outputs.size(0) / 2),
+                        modifiedOutputs.slice(0, outputs.size(0) / 2, outputs.size(0)),
+                    }, 1);
+
+                    // load  displacements from  matlab solution
+                    torch::Tensor matlabDisplacements_ = loadDisplacements();
+
+                    // supervised loss: MSE gegen matlab-Kontrollpunkte
+                    gsLoss = 1e9 * torch::mse_loss(netDisplacements_, matlabDisplacements_);
+
+                    // add  supervised loss to  total loss
+                    totalLoss = *gsLoss;
+                    
+                    // add  supervised loss to  cmd-output variable
+                    singleLossOutput << "GL + " << std::setw(11) << (*gsLoss).item<double>();
+                }
 
                 // calculation of  loss function for double-sided constraint solid
                 // div(sigma) + f = 0 --> div(sigma) = -f
                 elastLoss = torch::mse_loss(divStress, bodyForce);
-                
+
                 // add  elasticity loss to  total loss
                 totalLoss = elastLoss;
 
@@ -695,108 +717,11 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                 // only consider BC loss if dirichlet BCs are applied
                 if (!DIRI_SIDES_.empty()) {
                     // add a BC weight for penalization of  training
-                    int bcWeight = 1e7;
+                    int bcWeight = 1e8;
                     // initialize bcLoss variable
                     bcLoss = torch::tensor(0.0);
 
                     // evaluation of  displacements at  (Dirichlet) boundary points. Nbdr ... Neumann BounDaRy | Dbdr ... Dirichlet BounDaRy 
-                    auto u_Dbdr = Base::template output<0>().template eval<iganet::functionspace::boundary>(collPts_.second);
-                    // evaluation of  displacements at  reference boundary points.
-                    auto ref_Dbdr = ref_.template eval<iganet::functionspace::boundary>(collPts_.second);
-
-                    // loop through all dirichlet sides
-                    for (const auto& side : DIRI_SIDES_) {
-                        int sideNr = std::get<0>(side);
-                        
-                        switch (sideNr) {
-                            case 1: 
-                                *bcLoss += bcWeight * 
-                                    (torch::mse_loss(*std::get<0>(u_Dbdr)[0], *std::get<0>(ref_Dbdr)[0]) + 
-                                    torch::mse_loss(*std::get<0>(u_Dbdr)[1], *std::get<0>(ref_Dbdr)[1]));
-                                break;
-                            case 2:
-                                *bcLoss += bcWeight * 
-                                    (torch::mse_loss(*std::get<1>(u_Dbdr)[0], *std::get<1>(ref_Dbdr)[0]) + 
-                                    torch::mse_loss(*std::get<1>(u_Dbdr)[1], *std::get<1>(ref_Dbdr)[1]));
-                                break;
-                            case 3:
-                                *bcLoss += bcWeight * 
-                                    (torch::mse_loss(*std::get<2>(u_Dbdr)[0], *std::get<2>(ref_Dbdr)[0]) + 
-                                    torch::mse_loss(*std::get<2>(u_Dbdr)[1], *std::get<2>(ref_Dbdr)[1]));
-                                break;
-                            case 4:
-                                *bcLoss += bcWeight * 
-                                    (torch::mse_loss(*std::get<3>(u_Dbdr)[0], *std::get<3>(ref_Dbdr)[0]) + 
-                                    torch::mse_loss(*std::get<3>(u_Dbdr)[1], *std::get<3>(ref_Dbdr)[1]));
-                                break;
-                            default:
-                                std::cerr << "Error: Invalid side number for Dirichlet BC!" << std::endl;
-                        }
-                    }
-                    totalLoss += *bcLoss;
-                    singleLossOutput << " + BL " << std::setw(11) << (*bcLoss).item<double>() / bcWeight 
-                                    << " * 1e" << static_cast<int>(std::log10(bcWeight));
-                }
-
-                // print  loss values
-                std::cout << std::setw(11) << 
-                    totalLoss.item<double>() << " = " << singleLossOutput.str() << std::endl;
-            }
-            
-            // SUPERVISED LEARNING, nachher bitte hier einfügen.
-            else if (SUPERVISED_LEARNING_ == true) {
-
-                // create command line output variable for all  different losses
-                std::ostringstream singleLossOutput;
-            
-                // preprocess  outputs for comparison with  matlab solution
-                torch::Tensor modifiedOutputs = outputs * 1.0;
-            
-                // create netDisplacements_ from slices of modifiedOutputs
-                torch::Tensor netDisplacements_ = torch::stack({
-                    modifiedOutputs.slice(0, 0, outputs.size(0) / 2),
-                    modifiedOutputs.slice(0, outputs.size(0) / 2, outputs.size(0)),
-                }, 1);
-
-                // load  displacements from  matlab solution
-                torch::Tensor matlabDisplacements_ = loadDisplacements();
-
-                // supervised loss: MSE gegen matlab-Kontrollpunkte
-                gsLoss = 1e9 * torch::mse_loss(netDisplacements_, matlabDisplacements_);
-
-                // calculation of  loss function for double-sided constraint solid
-                // div(sigma) + f = 0 --> div(sigma) = -f
-                elastLoss = torch::mse_loss(divStress, bodyForce);
-
-                // add  elasticity loss and supervised loss to  total loss
-                totalLoss = *gsLoss + elastLoss;
-
-                // add  elasticity and supervised losses to  cmd-output variable
-                singleLossOutput << "GL " << std::setw(11) << (*gsLoss).item<double>()
-                                << " + EL " << std::setw(11) << elastLoss.item<double>();
-
-                // only consider traction-free-bc (tfbc) loss if tfbcs are applied
-                if (!TFBC_SIDES_.empty()) {
-                    tfbcLoss = torch::mse_loss(*tractionFreeValues, *tractionZeros);
-                    totalLoss += *tfbcLoss;
-                    singleLossOutput << " + TL " << std::setw(11) << (*tfbcLoss).item<double>();
-                }
-
-                // only consider force loss if force is applied
-                if (!FORCE_SIDES_.empty()) {
-                    forceLoss = torch::mse_loss(*forceValues, *targetForce);
-                    totalLoss += *forceLoss;
-                    singleLossOutput << " + FL " << std::setw(11) << (*forceLoss).item<double>();
-                }
-
-                // only consider BC loss if dirichlet BCs are applied
-                if (!DIRI_SIDES_.empty()) {
-                    // add a BC weight for penalization of  training
-                    int bcWeight = 1e7;
-                    // initialize bcLoss variable
-                    bcLoss = torch::tensor(0.0);
-
-                    // evaluation of  displacements at  boundary points
                     auto u_Dbdr = Base::template output<0>().template eval<iganet::functionspace::boundary>(collPts_.second);
                     // evaluation of  displacements at  reference boundary points
                     auto ref_Dbdr = ref_.template eval<iganet::functionspace::boundary>(collPts_.second);
@@ -835,14 +760,9 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                                     << " * 1e" << static_cast<int>(std::log10(bcWeight));
                 }
 
-                // print  loss values
-                std::cout << std::setw(11) << 
-                    totalLoss.item<double>() << " = " << singleLossOutput.str() << std::endl;
-            }
-
-            else {
-                throw std::runtime_error("Invalid value for SUPERVISED_LEARNING_ (should be true/false)");
-            }
+            // print  loss values
+            std::cout << std::setw(11) << 
+                totalLoss.item<double>() << " = " << singleLossOutput.str() << std::endl;
 
             return totalLoss;
         }
