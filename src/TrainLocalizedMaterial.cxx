@@ -16,6 +16,8 @@ int main() {
     double MIN_LOSS = 1e-12;
     bool SUPERVISED_LEARNING = false;
     std::string JSON_PATH = "/home/isabellaunix/DevelDA/singerDA/ConfigResult/result.json";     // SetBeforeSim    
+    int NONEURONS = 25;
+    int WEIGHT1 = 1;
 
     // spline parameters
     int64_t NR_CTRL_PTS = 8;  // in each direction 
@@ -59,6 +61,9 @@ int main() {
         MIN_LOSS = j["simulation"]["min_loss"];
         SUPERVISED_LEARNING = j["simulation"]["supervised_learning"];
         std::string JSON_PATH = j["simulation"]["json_path"];
+        NONEURONS = j["simulation"]["noNeurons"];
+        WEIGHT1 = j["simulation"]["weight1"];
+
 
         // spline parameters
         NR_CTRL_PTS = j["spline"]["nr_ctrl_pts"];
@@ -92,9 +97,9 @@ int main() {
     using namespace iganet::literals;
     using optimizer_t = torch::optim::LBFGS;
     
-    using geometry_t = iganet::S<iganet::UniformBSpline<real_t, 2, 3, 3>>;   
-    using variable_t = iganet::S<iganet::UniformBSpline<real_t, 2, 4, 4>>;
-    using material_t = iganet::S<iganet::UniformBSpline<real_t, 2, 4, 4>>;
+    using geometry_t = iganet::S<iganet::UniformBSpline<real_t, 2, DEGREE, DEGREE>>;   
+    using variable_t = iganet::S<iganet::UniformBSpline<real_t, 2, DEGREE, DEGREE>>;
+    using material_t = iganet::S<iganet::UniformBSpline<real_t, 2, DEGREE, DEGREE>>;
 
     using inputs_t = std::tuple<geometry_t, variable_t, material_t>;     
     using outputs_t = std::tuple<variable_t>;     
@@ -102,9 +107,9 @@ int main() {
         
     linear_elasticity_t net( // simulation parameters
         SUPERVISED_LEARNING, MAX_EPOCH, MIN_LOSS, solver_options, 
-        TFBC_SIDES, FORCE_SIDES, DIRI_SIDES, NR_CTRL_PTS, JSON_PATH,
+        TFBC_SIDES, FORCE_SIDES, DIRI_SIDES, NR_CTRL_PTS, JSON_PATH, WEIGHT1,
         // Number of neurons per layer
-        {25, 25},
+        {NONEURONS, NONEURONS},
         // Activation functions
         {{iganet::activation::sigmoid},
             {iganet::activation::sigmoid},
@@ -217,7 +222,7 @@ int main() {
 
     // PostProcessing ----------------------------------------------------------------------------------------------------------
     net.PostProc();     // rausschreiben der postprocessing größen
-    net.save("/home/isabellaunix/DevelDA/singerDA/ConfigResult/trained_iganet.pt");     // save the state of the trained network to evaluate later
+    // net.save("/home/isabellaunix/DevelDA/singerDA/ConfigResult/trained_iganet.pt");     // save the state of the trained network to evaluate later
 
     //  get  geometry and displacement as tensors
     torch::Tensor geometryAsTensor = net.template input<0>().as_tensor();

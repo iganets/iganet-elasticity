@@ -74,20 +74,21 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
         std::vector<std::tuple<int, double, double>> FORCE_SIDES_;
         std::vector<std::tuple<int, double, double>> DIRI_SIDES_;
         bool SUPERVISED_LEARNING_;
+        int WEIGHT1_;
 
     public:
         // Constructor I
         template <typename... Args>
         ElasticityForLocalizedMaterial(bool SUPERVISED_LEARNING, int MAX_EPOCH, double MIN_LOSS, const torch::optim::LBFGSOptions& solver_opts,                             // nn options
                           std::vector<int> TFBC_SIDES, std::vector<std::tuple<int, double, double>> FORCE_SIDES, std::vector<std::tuple<int, double, double>> DIRI_SIDES,   // boundary conditions
-                          int64_t NR_CTRL_PTS, std::string JSON_PATH,                                                                                                       // simulation
+                          int64_t NR_CTRL_PTS, std::string JSON_PATH, int WEIGHT1,                                                                                                       // simulation
                           std::vector<int64_t> &&layers, std::vector<std::vector<std::any>> &&activations, Args &&...args)                                                  //nn options / inOutput shapes
             : Base(std::forward<std::vector<int64_t>>(layers),
                    std::forward<std::vector<std::vector<std::any>>>(activations),
                    std::forward<Args>(args)...),
                    SUPERVISED_LEARNING_(SUPERVISED_LEARNING), MAX_EPOCH_(MAX_EPOCH), MIN_LOSS_(MIN_LOSS),
                    TFBC_SIDES_(TFBC_SIDES), FORCE_SIDES_(FORCE_SIDES), DIRI_SIDES_(DIRI_SIDES),
-                   NR_CTRL_PTS_(NR_CTRL_PTS), JSON_PATH_(std::move(JSON_PATH)), 
+                   NR_CTRL_PTS_(NR_CTRL_PTS), JSON_PATH_(std::move(JSON_PATH)),WEIGHT1_(WEIGHT1),
                    ref_(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)) {}
 
         ElasticityForLocalizedMaterial(std::vector<int> TFBC_SIDES, std::vector<std::tuple<int, double, double>> FORCE_SIDES, std::vector<std::tuple<int, double, double>> DIRI_SIDES,   // boundary conditions
@@ -600,7 +601,7 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                             G_knot_indices_interior_, G_coeff_indices_interior_);
 
 
-            auto mat = Base::template input<2>().eval(interiorCollPts_.first);      // matx = mat(0)
+            auto mat = Base::template input<2>().eval(collPts_.first);      // matx = mat(0)
 
             // partial derivatives of  displacements (u) 
             auto& ux_xx = Hessian(0,0,0);
@@ -632,6 +633,8 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                 auto Ml_y = Jacobian_mat(0,1);
                 auto Mm_x = Jacobian_mat(1,0);
                 auto Mm_y = Jacobian_mat(1,1);
+
+            auto matINT = Base::template input<2>().eval(collPts_.first);
 
             // calculation of  DIV STRESS of  stress tensor, this is what we're trying to minimize
             for (int i = 0; i < Hessian(0,0,0).size(0); ++i) {      // 36 it über interior 
@@ -684,7 +687,7 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                     gsLoss = 1e9 * torch::mse_loss(netDisplacements_, matlabDisplacements_);
 
                     // add  supervised loss to  total loss
-                    totalLoss = *gsLoss;
+                    totalLoss += *gsLoss;
                     
                     // add  supervised loss to  cmd-output variable
                     singleLossOutput << "GL + " << std::setw(11) << (*gsLoss).item<double>();
@@ -692,7 +695,9 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
 
                 // calculation of  loss function for double-sided constraint solid
                 // div(sigma) + f = 0 --> div(sigma) = -f
+                int elastWeight = WEIGHT1_;
                 elastLoss = torch::mse_loss(divStress, bodyForce);
+                elastLoss *= elastWeight;
 
                 // add  elasticity loss to  total loss
                 totalLoss = elastLoss;
@@ -717,7 +722,7 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                 // only consider BC loss if dirichlet BCs are applied
                 if (!DIRI_SIDES_.empty()) {
                     // add a BC weight for penalization of  training
-                    int bcWeight = 1e8;
+                    int bcWeight = 1e7;
                     // initialize bcLoss variable
                     bcLoss = torch::tensor(0.0);
 
@@ -764,6 +769,17 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
             std::cout << std::setw(11) << 
                 totalLoss.item<double>() << " = " << singleLossOutput.str() << std::endl;
 
+<<<<<<< HEAD
+=======
+            // writing out all loss terms to json
+            Epoche_j.push_back( epoch );
+            totalLoss_j.push_back( totalLoss.item<double>() );
+            EqLoss_j.push_back( elastLoss.item<double>() );
+            tfbcLoss_j.push_back( (*tfbcLoss).item<double>() );
+            // fLoss_j.push_back( (*forceLoss).item<double>() );
+            bcLoss_j.push_back( (*bcLoss).item<double>() );
+
+>>>>>>> 56a987a (minor changes)
             return totalLoss;
         }
 
@@ -776,7 +792,7 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                             var_knot_indices_interior_, var_coeff_indices_interior_,
                             G_knot_indices_interior_, G_coeff_indices_interior_);
 
-            auto matINT = Base::template input<2>().eval(interiorCollPts_.first);
+            auto matINT = Base::template input<2>().eval(collPts_.first);
 
             // partial derivatives of  displacements (u) 
             auto& ux_xx = Hessian(0,0,0);
@@ -842,7 +858,8 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
             torch::Tensor sigma_xx = torch::zeros({Jacobian[0]->size(0)});
             torch::Tensor sigma_xy = torch::zeros({Jacobian[0]->size(0)});
             torch::Tensor sigma_yy = torch::zeros({Jacobian[0]->size(0)}); 
-            torch::Tensor sigma_vm = torch::zeros({Jacobian[0]->size(0)});   
+            torch::Tensor sigma_vm = torch::zeros({Jacobian[0]->size(0)}); 
+            torch::Tensor epsilon_vm = torch::zeros({Jacobian[0]->size(0)});   
 
             torch::Tensor epsilon_xx = torch::zeros({Jacobian[0]->size(0)});
             torch::Tensor epsilon_yy = torch::zeros({Jacobian[0]->size(0)});
@@ -855,6 +872,7 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
             nlohmann::json netXYStresses_j = nlohmann::json::array();
             nlohmann::json netYStresses_j = nlohmann::json::array();
             nlohmann::json netPoisson_j = nlohmann::json::array();
+            nlohmann::json netVmStrain_j = nlohmann::json::array();
             nlohmann::json netStrainXX_j = nlohmann::json::array();
             nlohmann::json netStrainYY_j = nlohmann::json::array();
             nlohmann::json netStrainXY_j = nlohmann::json::array();
@@ -871,6 +889,14 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                 epsilon_xx[i] = ux_x[i];
                 epsilon_xy[i] = 0.5 * (ux_y[i] + uy_x[i]);
                 epsilon_yy[i] = uy_y[i];
+
+                double a = ((epsilon_xx[i]-epsilon_yy[i])*(epsilon_xx[i]-epsilon_yy[i])).item<double>();
+                double b = (epsilon_xx[i]*epsilon_xx[i]).item<double>();
+                double c = (epsilon_yy[i]*epsilon_yy[i]).item<double>();
+                double d = (epsilon_xy[i]*epsilon_xy[i]).item<double>();
+                double e = (2.0/3.0) * ( a + b + c + 6*d );
+
+                epsilon_vm[i] = sqrt( e );
 
                 // calculate  stress values for all collocation points
                 sigma_xx[i] = matLambda_temp * (epsilon_xx[i] + epsilon_yy[i]) + 2 * matMu_temp * epsilon_xx[i];
@@ -890,6 +916,7 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                 netXYStresses_j.push_back({sigma_xy[i].item<double>()});
                 netYStresses_j.push_back({sigma_yy[i].item<double>()});
 
+                netVmStrain_j.push_back({epsilon_vm[i].item<double>()});
                 netStrainXX_j.push_back({epsilon_xx[i].item<double>()});
                 netStrainYY_j.push_back({epsilon_yy[i].item<double>()});
                 netStrainXY_j.push_back({epsilon_xy[i].item<double>()});
@@ -903,6 +930,7 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
             appendToJsonFile("net_XYStresses", netXYStresses_j);
             appendToJsonFile("net_YStresses", netYStresses_j);
 
+            appendToJsonFile("net_VmStrain", netVmStrain_j);
             appendToJsonFile("net_StrainsXX", netStrainXX_j);
             appendToJsonFile("net_StrainsYY", netStrainYY_j);
             appendToJsonFile("net_StrainsXY", netStrainXY_j);
@@ -948,5 +976,15 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
             // write  divergence of  stress tensor to  json file
             appendToJsonFile("net_DivergenceX", netDivergenceX_j);
             appendToJsonFile("net_DivergenceY", netDivergenceY_j);
+<<<<<<< HEAD
+=======
+
+            appendToJsonFile("Epoche", Epoche_j);
+            appendToJsonFile("totalLoss", totalLoss_j);
+            appendToJsonFile("EqLoss", EqLoss_j);
+            appendToJsonFile("tfbcLoss", tfbcLoss_j);
+            // appendToJsonFile("fbcLoss", fLoss_j);
+            appendToJsonFile("dbcLoss", bcLoss_j);
+>>>>>>> 56a987a (minor changes)
         }
 };
