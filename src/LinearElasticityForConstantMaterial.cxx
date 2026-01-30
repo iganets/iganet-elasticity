@@ -8,7 +8,7 @@ using namespace iganet::literals;       // @ include\iganet.hpp
 using namespace gismo;
 
 template <typename Optimizer, typename Inputs, typename Outputs>
-class ElasticityForConstant : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
+class ElasticityForConstantMaterial : public iganet::IgANet2<Optimizer, Inputs, Outputs>,
                           public iganet::IgANetCustomizable2<Inputs, Outputs> {
 
     private:
@@ -84,17 +84,18 @@ class ElasticityForConstant : public iganet::IgANet2<Optimizer, Inputs, Outputs>
         double Lame1lambda = 121.15384615384615;
         double Lame2mu = 80.76923076923076;
 
+        // Loss Function Terms for PostProc                     
         nlohmann::json Epoche_j = nlohmann::json::array(); 
         nlohmann::json totalLoss_j = nlohmann::json::array();     // total
-        nlohmann::json EqLoss_j = nlohmann::json::array();        // Equation
-        nlohmann::json tfbcLoss_j = nlohmann::json::array();      // homo neumann
-        nlohmann::json fLoss_j = nlohmann::json::array();         // inhomo neumann
-        nlohmann::json bcLoss_j = nlohmann::json::array();        // dirichlet (both)
+        // nlohmann::json EqLoss_j = nlohmann::json::array();        // Equation
+        // nlohmann::json tfbcLoss_j = nlohmann::json::array();      // homo neumann
+        // nlohmann::json fLoss_j = nlohmann::json::array();         // inhomo neumann
+        // nlohmann::json bcLoss_j = nlohmann::json::array();        // dirichlet (both)
 
     public:
         // Constructor I
         template <typename... Args>
-        ElasticityForConstant(bool SUPERVISED_LEARNING, int MAX_EPOCH, double MIN_LOSS, const torch::optim::LBFGSOptions& solver_opts,                             // nn options
+        ElasticityForConstantMaterial(bool SUPERVISED_LEARNING, int MAX_EPOCH, double MIN_LOSS, const torch::optim::LBFGSOptions& solver_opts,                             // nn options
                           std::vector<int> TFBC_SIDES, std::vector<std::tuple<int, double, double>> FORCE_SIDES, std::vector<std::tuple<int, double, double>> DIRI_SIDES,   // boundary conditions
                           int64_t NR_CTRL_PTS, std::string JSON_PATH, int WEIGHT1,                                                                                                       // simulation
                           std::vector<int64_t> &&layers, std::vector<std::vector<std::any>> &&activations, Args &&...args)                                                  //nn options / inOutput shapes
@@ -106,7 +107,7 @@ class ElasticityForConstant : public iganet::IgANet2<Optimizer, Inputs, Outputs>
                    NR_CTRL_PTS_(NR_CTRL_PTS), JSON_PATH_(std::move(JSON_PATH)),WEIGHT1_(WEIGHT1),
                    ref_(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)) {}
 
-        ElasticityForConstant(std::vector<int> TFBC_SIDES, std::vector<std::tuple<int, double, double>> FORCE_SIDES, std::vector<std::tuple<int, double, double>> DIRI_SIDES,   // boundary conditions
+        ElasticityForConstantMaterial(std::vector<int> TFBC_SIDES, std::vector<std::tuple<int, double, double>> FORCE_SIDES, std::vector<std::tuple<int, double, double>> DIRI_SIDES,   // boundary conditions
                           int64_t NR_CTRL_PTS, std::string JSON_PATH)
             : Base(),
                    TFBC_SIDES_(TFBC_SIDES), FORCE_SIDES_(FORCE_SIDES), DIRI_SIDES_(DIRI_SIDES),
@@ -615,9 +616,6 @@ class ElasticityForConstant : public iganet::IgANet2<Optimizer, Inputs, Outputs>
                             var_knot_indices_interior_, var_coeff_indices_interior_,
                             G_knot_indices_interior_, G_coeff_indices_interior_);
 
-
-            // auto mat = Base::template input<2>().eval(collPts_.first);      // matx = mat(0)
-
             // partial derivatives of  displacements (u) 
             auto& ux_xx = Hessian(0,0,0);
             auto& ux_xy = Hessian(0,1,0);
@@ -807,7 +805,7 @@ class ElasticityForConstant : public iganet::IgANet2<Optimizer, Inputs, Outputs>
                             var_knot_indices_interior_, var_coeff_indices_interior_,
                             G_knot_indices_interior_, G_coeff_indices_interior_);
 
-            // auto matINT = Base::template input<2>().eval(collPts_.first);
+            // auto matINT = Base::template input<2>().eval(interiorCollPts_.first);
 
             // partial derivatives of  displacements (u) 
             auto& ux_xx = Hessian(0,0,0);
@@ -1106,7 +1104,7 @@ int main() {
 
     using inputs_t = std::tuple<geometry_t, variable_t>; //, material_t>;     
     using outputs_t = std::tuple<variable_t>;     
-    using linear_elasticity_t = ElasticityForConstant<optimizer_t, inputs_t, outputs_t>;
+    using linear_elasticity_t = ElasticityForConstantMaterial<optimizer_t, inputs_t, outputs_t>;
         
     linear_elasticity_t net( // simulation parameters
         SUPERVISED_LEARNING, MAX_EPOCH, MIN_LOSS, solver_options, 
