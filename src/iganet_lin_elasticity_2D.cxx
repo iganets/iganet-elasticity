@@ -7,19 +7,16 @@ using namespace gismo;
 
 /// @brief Specialization of the IgANet class for linear elasticity in 2D
 template <typename Optimizer, typename GeometryMap, typename Variable>
-class linear_elasticity : public iganet::IgANet<Optimizer, GeometryMap, Variable>,
-                          public iganet::IgANetCustomizable<GeometryMap, Variable> {
-
+class linear_elasticity
+  : public iganet::v1::IgANet<Optimizer, GeometryMap, Variable>,
+    public iganet::v1::IgANetCustomizable<GeometryMap, Variable>
+{
 private:
-  using Base = iganet::IgANet<Optimizer, GeometryMap, Variable>;
+  using Base = iganet::v1::IgANet<Optimizer, GeometryMap, Variable>;
+  using Customizable = iganet::v1::IgANetCustomizable<GeometryMap, Variable>;
 
-  typename Base::variable_collPts_type collPts_;
+  typename Base::variable_collPts_type collPts_; 
   typename Base::variable_collPts_type interiorCollPts_;
-
-  int nrCollPts_;
-  Variable ref_;
-
-  using Customizable = iganet::IgANetCustomizable<GeometryMap, Variable>;
 
   typename Customizable::variable_interior_knot_indices_type var_knot_indices_;
   typename Customizable::variable_interior_coeff_indices_type var_coeff_indices_;
@@ -42,6 +39,9 @@ private:
   // material properties - lame's parameters
   double lambda_;
   double mu_;
+
+  int nrCollPts_; 
+  Variable ref_;
 
   // simulation parameters
   int MAX_EPOCH_;
@@ -1051,13 +1051,13 @@ int main() {
 
     // simulation parameters
     int MAX_EPOCH = 100;
-    double MIN_LOSS = 1e-12;
+    double MIN_LOSS = 1e-8;
     bool SUPERVISED_LEARNING = false;
-    std::string JSON_PATH = "/home/isabellaunix/DevelDA/singerDA/ConfigResult/result.json";       
+    std::string JSON_PATH = "/usr2/obermair/Documents/02_Forschung/Programmcode/iganet-elasticity/result.json";       
 
     // reference simulation parameters
     bool RUN_REF_SIM = false;
-    int NR_CTRL_PTS_REF = 50;
+    int NR_CTRL_PTS_REF = 64;
     int DEGREE_REF = 4;
 
     // spline parameters
@@ -1070,7 +1070,7 @@ int main() {
         };
     std::vector<std::tuple<int, double, double>> DIRI_SIDES = {
         {1, 0.0,  0.0},       // {side, x-displ, y-displ}
-        {2, 0.05,  0.0},
+        {2, 1.0,  0.0},
         };
     std::vector<int> TFBC_SIDES = {3,4}; // {sides}
 
@@ -1085,62 +1085,63 @@ int main() {
                                         tolerance_change(1e-12).
                                         line_search_fn("strong_wolfe");
 
-    // OPTIONAL .json input for easy change of params. no need to rebuild :)
-    bool USERINPUT = true;
-    std::ifstream file("/home/isabellaunix/DevelDA/singerDA/ConfigResult/config.json");
-    if (!file) {
-        std::cerr << "Could not open config.json\n";
-        return 1;
-    }
-    nlohmann::json j;
-    file >> j;
-    USERINPUT = j["simulation"]["USERINPUT"];
-    if (USERINPUT==false) {
-            // material parameters
-        YOUNG_MODULUS = j["material"]["young_modulus"];
-        POISSON_RATIO = j["material"]["poisson_ratio"];
-
-        // simulation parameters
-        MAX_EPOCH = j["simulation"]["max_epoch"];
-        MIN_LOSS = j["simulation"]["min_loss"];
-        SUPERVISED_LEARNING = j["simulation"]["supervised_learning"];
-        std::string JSON_PATH = j["simulation"]["json_path"];
-
-        // reference simulation
-        RUN_REF_SIM = j["reference_simulation"]["run"];
-        NR_CTRL_PTS_REF = j["reference_simulation"]["nr_ctrl_pts_ref"];
-        DEGREE_REF = j["reference_simulation"]["degree_ref"];
-
-        // spline parameters
-        NR_CTRL_PTS = j["spline"]["nr_ctrl_pts"];
-        // DEGREE = 4; // could be set dynamically too
-
-        // boundary conditions
-        FORCE_SIDES.clear();    //inhomo neumann
-        for (const auto& fs : j["boundary_conditions"]["force_sides"]) {
-            FORCE_SIDES.emplace_back(fs[0], fs[1], fs[2]);
+    bool wanted_to_use_config = false;
+    if(wanted_to_use_config) {                                   // OPTIONAL .json input for easy change of params. no need to rebuild :)
+        bool USERINPUT = true;
+        std::ifstream file("/usr2/obermair/Documents/02_Forschung/Programmcode/iganet-elasticity/src/ConfigResultTmpl/configTmpl.json");
+        if (!file) {
+            std::cerr << "Could not open config.json\n";
+            return 1;
         }
+        nlohmann::json j;
+        file >> j;
+        USERINPUT = j["simulation"]["USERINPUT"];
+        if (USERINPUT==false) {
+                // material parameters
+            YOUNG_MODULUS = j["material"]["young_modulus"];
+            POISSON_RATIO = j["material"]["poisson_ratio"];
 
-        DIRI_SIDES.clear();     //inhomo homo dirichlet
-        for (const auto& ds : j["boundary_conditions"]["diri_sides"]) {
-            DIRI_SIDES.emplace_back(ds[0], ds[1], ds[2]);
-        }
+            // simulation parameters
+            MAX_EPOCH = j["simulation"]["max_epoch"];
+            MIN_LOSS = j["simulation"]["min_loss"];
+            SUPERVISED_LEARNING = j["simulation"]["supervised_learning"];
+            std::string JSON_PATH = j["simulation"]["json_path"];
 
-        TFBC_SIDES = j["boundary_conditions"]["tfbc_sides"].get<std::vector<int>>();    //homo neumann
+            // reference simulation
+            RUN_REF_SIM = j["reference_simulation"]["run"];
+            NR_CTRL_PTS_REF = j["reference_simulation"]["nr_ctrl_pts_ref"];
+            DEGREE_REF = j["reference_simulation"]["degree_ref"];
 
-        // body force
-        BODY_FORCE.first = j["body_force"][0];      //vorce
-        BODY_FORCE.second = j["body_force"][1];
+            // spline parameters
+            NR_CTRL_PTS = j["spline"]["nr_ctrl_pts"];
+            // DEGREE = 4; // could be set dynamically too
 
-        // just to verify
-        std::cout << "Young's modulus: " << YOUNG_MODULUS << "\n";
-        std::cout << "Dirichlet Boundary Conditions: " << DIRI_SIDES << "\n";
-        std::cout << "TFBC sides: ";
-        for (auto side : TFBC_SIDES) std::cout << side << " ";
-        std::cout << "\n";
-    } 
-    // --------------------------- //
+            // boundary conditions
+            FORCE_SIDES.clear();    //inhomo neumann
+            for (const auto& fs : j["boundary_conditions"]["force_sides"]) {
+                FORCE_SIDES.emplace_back(fs[0], fs[1], fs[2]);
+            }
 
+            DIRI_SIDES.clear();     //inhomo homo dirichlet
+            for (const auto& ds : j["boundary_conditions"]["diri_sides"]) {
+                DIRI_SIDES.emplace_back(ds[0], ds[1], ds[2]);
+            }
+
+            TFBC_SIDES = j["boundary_conditions"]["tfbc_sides"].get<std::vector<int>>();    //homo neumann
+
+            // body force
+            BODY_FORCE.first = j["body_force"][0];      //vorce
+            BODY_FORCE.second = j["body_force"][1];
+
+            // just to verify
+            std::cout << "Young's modulus: " << YOUNG_MODULUS << "\n";
+            std::cout << "Dirichlet Boundary Conditions: " << DIRI_SIDES << "\n";
+            std::cout << "TFBC sides: ";
+            for (auto side : TFBC_SIDES) std::cout << side << " ";
+            std::cout << "\n";
+        } 
+    } // --------------------------- //
+        
 
     // calculation of lame parameters
     double lambda = (YOUNG_MODULUS * POISSON_RATIO) / 
@@ -1326,13 +1327,24 @@ int main() {
     //   // evaluate the new solution
     //   net.eval();
 
-    #ifdef IGANET_WITH_MATPLOT
-    // Plot the solution
-    // net.G().space().plot(net.u().space(), net.collPts().first, json)->show();
-    // net.G().space().plot(net.collPts().first, json)->show();
-    // // Plot the difference between the exact and predicted solutions
-    // net.G().plot(net.ref().abs_diff(net.u()), net.collPts().first, json)->show();
-    #endif
+#ifdef IGANET_WITH_MATPLOT
+    auto Gdef = net.G().space() + net.u().space();
+
+    auto f = Gdef.plot();
+
+    // 1) gleiche Achsenskalierung
+    f->backend()->run_command("set size ratio -1");
+
+    // 2) etwas Rand um die Geometrie
+    f->backend()->run_command("set offsets graph 0.06, graph 0.06, graph 0.06, graph 0.06");
+
+    // optional: Achsen automatisch lassen (normalerweise Default)
+    // f->backend()->run_command("set autoscale");
+
+    // speichern
+    f->save("deformed_geometry.pdf");
+#endif
+
 
     // PROCESSING NETWORK OUTPUT FOR SPLINEPY
 

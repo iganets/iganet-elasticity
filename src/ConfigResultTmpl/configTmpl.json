@@ -3,7 +3,7 @@
     "max_epoch": 100,
     "min_loss": 5e-8,
     "supervised_learning": false,
-    "json_path": "/home/isabellaunix/DevelDA/singerDA/ConfigResult/result.json"
+    "json_path": "/usr2/obermair/Documents/02_Forschung/Programmcode/iganet-elasticity/result.json"
   },
   "spline": {
     "nr_ctrl_pts": 8,
@@ -11,10 +11,10 @@
   },
   "boundary_conditions": {
     "force_sides": [
-      [2, 100.0, 0.0]
     ],
     "diri_sides": [
       [1, 0.0, 0.0]
+      [2, 1.0, 0.0]
     ],
     "tfbc_sides": [3,4]
   },
@@ -22,9 +22,9 @@
 
   "matlab": {
     "s1": 0,
-    "s2_diri": [0.5, 0],
+    "s2_diri": [1, 0],
     "s3": 0,
     "s4": 0,
-    "s2_neum": [100, 0.0]
+    // "s2_neum": [100, 0.0]
   }
 }
