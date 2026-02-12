@@ -1193,61 +1193,99 @@ int main() {
         // Number of B-spline coefficients of the variable 
         std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)) );
 
-    // ------------------------------
-    // Optional GISMO results (only if compiled with GISMO)
-    // ------------------------------
-    torch::Tensor gsCtrlPts, gsDisplacements, gsStresses;
-
-    // Default: empty tensors so the code can run without GISMO
-    gsCtrlPts        = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-    gsDisplacements  = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-    gsStresses       = torch::empty({0, 1}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-
+        
 #ifdef IGANET_WITH_GISMO
-    // Only when GISMO is available:
-    std::tie(gsCtrlPts, gsDisplacements, gsStresses) =
-        linear_elasticity_t::RunGismoSimulation(
-            NR_CTRL_PTS, DEGREE, YOUNG_MODULUS, POISSON_RATIO,
-            DIRI_SIDES, FORCE_SIDES, BODY_FORCE);
+    
+    torch::Tensor gsOriginCtrlPts    = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+    torch::Tensor gsDisplacements    = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+    torch::Tensor gsCtrlPts          = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+    torch::Tensor gsStresses         = torch::empty({0, 1}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+    
+    nlohmann::json gsOriginCtrlPts_j = nlohmann::json::array();
+    nlohmann::json gsDisplacements_j = nlohmann::json::array();
+    nlohmann::json gsCtrlPts_j       = nlohmann::json::array();
+    nlohmann::json gsStresses_j      = nlohmann::json::array();
+
+    std::tie(gsOriginCtrlPts, gsDisplacements, gsStresses) =
+    linear_elasticity_t::RunGismoSimulation(
+        NR_CTRL_PTS, DEGREE, YOUNG_MODULUS, POISSON_RATIO,
+        DIRI_SIDES, FORCE_SIDES, BODY_FORCE);
+    
+    // calculate the new position of the control points after displacement
+    gsCtrlPts = gsOriginCtrlPts + gsDisplacements;
+
+    for (int i = 0; i < gsCtrlPts.size(0); ++i) {
+        gsOriginCtrlPts_j.push_back({
+            gsOriginCtrlPts[i][0].item<double>(),
+            gsOriginCtrlPts[i][1].item<double>()
+        });
+        
+        gsDisplacements_j.push_back({
+            gsDisplacements[i][0].item<double>(),
+            gsDisplacements[i][1].item<double>()
+        });
+
+        gsCtrlPts_j.push_back({
+            gsCtrlPts[i][0].item<double>(),
+            gsCtrlPts[i][1].item<double>()
+        });
+
+        gsStresses_j.push_back({ 
+            gsStresses[i][0].item<double>() 
+        });
+    }
+
+    net.appendToJsonFile("gsOriginCtrlPts", gsOriginCtrlPts_j);
+    net.appendToJsonFile("gsDisplacements", gsDisplacements_j);
+    net.appendToJsonFile("gsCtrlPts", gsCtrlPts_j);
+    net.appendToJsonFile("gsStresses", gsStresses_j);
 
     if (RUN_REF_SIM) {
-        auto [gsRefCtrlPts, gsRefDisplacements, gsRefStresses] =
+        torch::Tensor gsRefOriginCtrlPts    = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+        torch::Tensor gsRefCtrlPts          = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+        torch::Tensor gsRefDisplacements    = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+        torch::Tensor gsRefStresses         = torch::empty({0, 1}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+
+        nlohmann::json gsRefOriginCtrlPts_j = nlohmann::json::array();
+        nlohmann::json gsRefCtrlPts_j       = nlohmann::json::array();
+        nlohmann::json gsRefDisplacements_j = nlohmann::json::array();
+        nlohmann::json gsRefStresses_j      = nlohmann::json::array();
+
+        std::tie(gsRefOriginCtrlPts, gsRefDisplacements, gsRefStresses) =
             linear_elasticity_t::RunGismoSimulation(
                 NR_CTRL_PTS_REF, DEGREE,
                 YOUNG_MODULUS, POISSON_RATIO,
                 DIRI_SIDES, FORCE_SIDES, BODY_FORCE);
 
-        torch::Tensor displacedGsRefCtrlPts = gsRefCtrlPts + gsRefDisplacements;
+        // calculate the new position of the reference solution's control points after displacement        
+        gsRefCtrlPts = gsRefOriginCtrlPts + gsRefDisplacements;
 
-        nlohmann::json displacedGsRefCtrlPts_j = nlohmann::json::array();
-        nlohmann::json gsRefStresses_j = nlohmann::json::array();
-        nlohmann::json gsRefDisplacements_j = nlohmann::json::array();
-        nlohmann::json gsRefOriginalCtrlPts_j = nlohmann::json::array();
-
-        for (int i = 0; i < displacedGsRefCtrlPts.size(0); ++i) {
-            displacedGsRefCtrlPts_j.push_back({
-                displacedGsRefCtrlPts[i][0].item<double>(),
-                displacedGsRefCtrlPts[i][1].item<double>()
+        for (int i = 0; i < gsRefCtrlPts.size(0); ++i) {
+            gsRefOriginCtrlPts_j.push_back({
+                gsRefOriginCtrlPts[i][0].item<double>(),
+                gsRefOriginCtrlPts[i][1].item<double>()
             });
 
-            gsRefStresses_j.push_back({ gsRefStresses[i][0].item<double>() });
+            gsRefCtrlPts_j.push_back({
+                gsRefCtrlPts[i][0].item<double>(),
+                gsRefCtrlPts[i][1].item<double>()
+            });
 
             gsRefDisplacements_j.push_back({
                 gsRefDisplacements[i][0].item<double>(),
                 gsRefDisplacements[i][1].item<double>()
             });
-
-            gsRefOriginalCtrlPts_j.push_back({
-                gsRefCtrlPts[i][0].item<double>(),
-                gsRefCtrlPts[i][1].item<double>()
+            
+            gsRefStresses_j.push_back({ 
+                gsRefStresses[i][0].item<double>() 
             });
         }
 
-        net.appendToJsonFile("gsRef_CtrlPts", displacedGsRefCtrlPts_j);
-        net.appendToJsonFile("gsRef_Degree", DEGREE_REF);
-        net.appendToJsonFile("gsRef_VmStresses", gsRefStresses_j);
-        net.appendToJsonFile("gsRef_Displacements", gsRefDisplacements_j);
-        net.appendToJsonFile("gsRef_OriginalCtrlPts", gsRefOriginalCtrlPts_j);
+        net.appendToJsonFile("gsRefOriginCtrlPts", gsRefOriginCtrlPts_j);
+        net.appendToJsonFile("gsRefCtrlPts", gsRefCtrlPts_j);
+        net.appendToJsonFile("gsRefDisplacements", gsRefDisplacements_j);
+        net.appendToJsonFile("gsRefStresses", gsRefStresses_j);
+        net.appendToJsonFile("gsRefDegree", DEGREE_REF);
     }
 #endif
 
@@ -1422,41 +1460,6 @@ int main() {
     // write net data (always)
     net.appendToJsonFile("net_CtrlPts", displacedNetCtrlPts_j);
     net.appendToJsonFile("net_Degree", DEGREE);
-
-#ifdef IGANET_WITH_GISMO
-    torch::Tensor displacedGsCtrlPts = gsCtrlPts + gsDisplacements;
-
-    nlohmann::json displacedGsCtrlPts_j = nlohmann::json::array();
-    nlohmann::json gsStresses_j = nlohmann::json::array();
-    nlohmann::json gsDisplacements_j = nlohmann::json::array();
-    nlohmann::json gsOriginalCtrlPts_j = nlohmann::json::array();
-
-    for (int i = 0; i < displacedGsCtrlPts.size(0); ++i) {
-        displacedGsCtrlPts_j.push_back({
-            displacedGsCtrlPts[i][0].item<double>(),
-            displacedGsCtrlPts[i][1].item<double>()
-        });
-
-        gsStresses_j.push_back({ gsStresses[i][0].item<double>() });
-
-        gsDisplacements_j.push_back({
-            gsDisplacements[i][0].item<double>(),
-            gsDisplacements[i][1].item<double>()
-        });
-
-        gsOriginalCtrlPts_j.push_back({
-            gsCtrlPts[i][0].item<double>(),
-            gsCtrlPts[i][1].item<double>()
-        });
-    }
-
-    net.appendToJsonFile("gs_CtrlPts", displacedGsCtrlPts_j);
-    net.appendToJsonFile("gs_VmStresses", gsStresses_j);
-    net.appendToJsonFile("gs_Displacements", gsDisplacements_j);
-    net.appendToJsonFile("gs_Degree", DEGREE);
-    net.appendToJsonFile("gs_OriginalCtrlPts", gsOriginalCtrlPts_j);
-#endif
-
     
     iganet::finalize();
     return 0;
