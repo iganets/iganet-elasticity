@@ -1,8 +1,12 @@
 #include <iganet.h>
 #include <iostream>
 #include <fstream>
+#include <utils/config.hpp>
+#include <utils/paths.hpp>
 
 using namespace iganet::literals;
+using iganet_elasticity::utils::paths::repo_root_from_build_exe;
+using iganet_elasticity::utils::config::require;
 
 /// @brief Specialization of the IgANet class for linear elasticity in 2D
 template <typename Optimizer, typename GeometryMap, typename Variable>
@@ -48,6 +52,7 @@ class linear_elasticity
     int64_t NR_CTRL_PTS_;
     std::vector<int> TFBC_SIDES_;
     std::string JSON_PATH_;
+    std::pair<double, double> BODY_FORCE_;
     std::vector<std::tuple<int, double, double>> FORCE_SIDES_;
     std::vector<std::tuple<int, double, double>> DIRI_SIDES_;
     bool SUPERVISED_LEARNING_;
@@ -56,7 +61,7 @@ public:
     /// @brief Constructor
     template <typename... Args>
     linear_elasticity(double lambda, double mu, bool SUPERVISED_LEARNING, int MAX_EPOCH, 
-                    double MIN_LOSS, std::vector<double> BODY_FORCE, std::vector<int> TFBC_SIDES,
+                    double MIN_LOSS, std::pair<double, double> BODY_FORCE, std::vector<int> TFBC_SIDES,
                     std::vector<std::tuple<int, double, double>> FORCE_SIDES,
                     std::vector<std::tuple<int, double, double>> DIRI_SIDES, 
                     int64_t NR_CTRL_PTS, std::string JSON_PATH, std::vector<int64_t> &&layers, 
@@ -1069,390 +1074,415 @@ int main() {
     iganet::init();
     iganet::verbose(std::cout);
 
-    // ------- USER INPUTS ------- //
-    
+    // ------- USER INPUTS (mandatory from config) ------- //
+
+    // resolve paths relative to repo root
+    std::filesystem::path repo_root;
+    try {
+        repo_root = repo_root_from_build_exe();
+    } catch (const std::exception& e) {
+        std::cerr << "Could not determine repo root: " << e.what() << "\n";
+        return 1;
+    }
+
+    const std::filesystem::path CONFIG_PATH = repo_root / "sim_config.json";
+    const std::filesystem::path RESULT_JSON_PATH = repo_root / "result.json";  // output file
+
+    // load config
+    std::ifstream file(CONFIG_PATH);
+    if (!file) {
+        std::cerr << "Could not open config file: " << CONFIG_PATH << "\n";
+        return 1;
+    }
+
+    nlohmann::json j;
+    try {
+        file >> j;
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to parse config JSON: " << e.what() << "\n";
+        return 1;
+    }
+
     // material parameters
-    double YOUNG_MODULUS = 210.0;
-    double POISSON_RATIO = 0.25;
+    double YOUNG_MODULUS = 0.0;
+    double POISSON_RATIO = 0.0;
 
     // simulation parameters
-    int MAX_EPOCH = 100;
-    double MIN_LOSS = 1e-8;
+    int MAX_EPOCH = 0;
+    double MIN_LOSS = 0.0;
     bool SUPERVISED_LEARNING = false;
-    std::string JSON_PATH = "/usr2/obermair/Documents/02_Forschung/Programmcode/iganet-elasticity/result.json";       
+    std::string JSON_PATH;  // result.json path (output)
 
     // reference simulation parameters
     bool RUN_REF_SIM = false;
-    int NR_CTRL_PTS_REF = 64;
-    int DEGREE_REF = 4;
+    int NR_CTRL_PTS_REF = 0;
+    int DEGREE_REF = 0;
 
     // spline parameters
-    int64_t NR_CTRL_PTS = 8;  // in each direction 
-    constexpr int DEGREE = 4; // for geometry and variable og.: constexpr
+    int64_t NR_CTRL_PTS = 0;
+    int DEGREE_CFG = 0;
 
     // boundary conditions
-    std::vector<std::tuple<int, double, double>> FORCE_SIDES = {
-        //   {2, 50.0,  0.0},   // {side, x-traction, y-traction}
-        };
-    std::vector<std::tuple<int, double, double>> DIRI_SIDES = {
-        {1, 0.0,  0.0},       // {side, x-displ, y-displ}
-        {2, 1.0,  0.0},
-        };
-    std::vector<int> TFBC_SIDES = {3,4}; // {sides}
+    std::vector<std::tuple<int, double, double>> FORCE_SIDES;
+    std::vector<std::tuple<int, double, double>> DIRI_SIDES;
+    std::vector<int> TFBC_SIDES;
 
-    // body force (constant over the whole domain)
-    std::pair<double, double> BODY_FORCE = {0.0, 0.0}; // {fx, fy}
+    // body force
+    std::pair<double, double> BODY_FORCE{0.0, 0.0};
 
-    bool wanted_to_use_config = false;
-    if(wanted_to_use_config) {                                   // OPTIONAL .json input for easy change of params. no need to rebuild :)
-        bool USERINPUT = true;
-        std::ifstream file("/usr2/obermair/Documents/02_Forschung/Programmcode/iganet-elasticity/src/ConfigResultTmpl/configTmpl.json");
-        if (!file) {
-            std::cerr << "Could not open config.json\n";
-            return 1;
+    try {
+        // material
+        YOUNG_MODULUS = require(j, "material.young_modulus").get<double>();
+        POISSON_RATIO = require(j, "material.poisson_ratio").get<double>();
+
+        // simulation
+        MAX_EPOCH = require(j, "simulation.max_epoch").get<int>();
+        MIN_LOSS = require(j, "simulation.min_loss").get<double>();
+        SUPERVISED_LEARNING = require(j, "simulation.supervised_learning").get<bool>();
+
+        // IMPORTANT: output result.json is fixed in repo root
+        JSON_PATH = RESULT_JSON_PATH.string();
+
+        // spline
+        NR_CTRL_PTS = require(j, "spline.nr_ctrl_pts").get<int64_t>();
+        DEGREE_CFG = require(j, "spline.degree").get<int>();
+
+        // BCs
+        FORCE_SIDES.clear();
+        for (const auto& fsj : require(j, "boundary_conditions.force_sides")) {
+            FORCE_SIDES.emplace_back(fsj.at(0).get<int>(), fsj.at(1).get<double>(), fsj.at(2).get<double>());
         }
-        nlohmann::json j;
-        file >> j;
-        USERINPUT = j["simulation"]["USERINPUT"];
-        if (USERINPUT==false) {
-                // material parameters
-            YOUNG_MODULUS = j["material"]["young_modulus"];
-            POISSON_RATIO = j["material"]["poisson_ratio"];
 
-            // simulation parameters
-            MAX_EPOCH = j["simulation"]["max_epoch"];
-            MIN_LOSS = j["simulation"]["min_loss"];
-            SUPERVISED_LEARNING = j["simulation"]["supervised_learning"];
-            std::string JSON_PATH = j["simulation"]["json_path"];
+        DIRI_SIDES.clear();
+        for (const auto& dsj : require(j, "boundary_conditions.diri_sides")) {
+            DIRI_SIDES.emplace_back(dsj.at(0).get<int>(), dsj.at(1).get<double>(), dsj.at(2).get<double>());
+        }
 
-            // reference simulation
-            RUN_REF_SIM = j["reference_simulation"]["run"];
-            NR_CTRL_PTS_REF = j["reference_simulation"]["nr_ctrl_pts_ref"];
-            DEGREE_REF = j["reference_simulation"]["degree_ref"];
+        TFBC_SIDES = require(j, "boundary_conditions.tfbc_sides").get<std::vector<int>>();
 
-            // spline parameters
-            NR_CTRL_PTS = j["spline"]["nr_ctrl_pts"];
-            // DEGREE = 4; // could be set dynamically too
+        // body force
+        {
+            const auto& bf = require(j, "body_force");
+            BODY_FORCE.first = bf.at(0).get<double>();
+            BODY_FORCE.second = bf.at(1).get<double>();
+        }
 
-            // boundary conditions
-            FORCE_SIDES.clear();    //inhomo neumann
-            for (const auto& fs : j["boundary_conditions"]["force_sides"]) {
-                FORCE_SIDES.emplace_back(fs[0], fs[1], fs[2]);
-            }
+        // reference simulation (only if present in config)
+        if (j.contains("reference_simulation")) {
+            RUN_REF_SIM = require(j, "reference_simulation.run").get<bool>();
+            NR_CTRL_PTS_REF = require(j, "reference_simulation.nr_ctrl_pts_ref").get<int>();
+            DEGREE_REF = require(j, "reference_simulation.degree_ref").get<int>();
+        }
 
-            DIRI_SIDES.clear();     //inhomo homo dirichlet
-            for (const auto& ds : j["boundary_conditions"]["diri_sides"]) {
-                DIRI_SIDES.emplace_back(ds[0], ds[1], ds[2]);
-            }
-
-            TFBC_SIDES = j["boundary_conditions"]["tfbc_sides"].get<std::vector<int>>();    //homo neumann
-
-            // body force
-            BODY_FORCE.first = j["body_force"][0];   
-            BODY_FORCE.second = j["body_force"][1];
-
-            // just to verify
-            std::cout << "Young's modulus: " << YOUNG_MODULUS << "\n";
-            std::cout << "Dirichlet Boundary Conditions: " << DIRI_SIDES << "\n";
-            std::cout << "TFBC sides: ";
-            for (auto side : TFBC_SIDES) std::cout << side << " ";
-            std::cout << "\n";
-        } 
-    } // --------------------------- //
+    } catch (const std::exception& e) {
+        std::cerr << "Config error: " << e.what() << "\n";
+        return 1;
+    }
         
-
     // calculation of lame parameters
     double lambda = (YOUNG_MODULUS * POISSON_RATIO) / 
                     ((1 + POISSON_RATIO) * (1 - 2 * POISSON_RATIO));
     double mu = YOUNG_MODULUS / (2 * (1 + POISSON_RATIO));
 
-    using real_t = double;
-    using namespace iganet::literals;
-    using optimizer_t = torch::optim::LBFGS;
-    using geometry_t = iganet::S<iganet::UniformBSpline<real_t, 2, DEGREE, DEGREE>>;
-    using variable_t = iganet::S<iganet::UniformBSpline<real_t, 2, DEGREE, DEGREE>>;
-    using linear_elasticity_t = linear_elasticity<optimizer_t, geometry_t, variable_t>;
+    auto run = [&]<int DEGREE>() -> int {
+        using real_t = double;
+        using namespace iganet::literals;
+        using optimizer_t = torch::optim::LBFGS;
+        using geometry_t = iganet::S<iganet::UniformBSpline<real_t, 2, DEGREE, DEGREE>>;
+        using variable_t = iganet::S<iganet::UniformBSpline<real_t, 2, DEGREE, DEGREE>>;
+        using linear_elasticity_t = linear_elasticity<optimizer_t, geometry_t, variable_t>;
 
-    linear_elasticity_t net(//simulation parameters 
-        lambda, mu, SUPERVISED_LEARNING, MAX_EPOCH, MIN_LOSS, 
-        BODY_FORCE, TFBC_SIDES, FORCE_SIDES, DIRI_SIDES, NR_CTRL_PTS, JSON_PATH, 
-        // Number of neurons per layer 
-        {25, 25}, 
-        // Activation functions 
-        {{iganet::activation::sigmoid}, {iganet::activation::sigmoid}, {iganet::activation::none}}, 
-        // Number of B-spline coefficients of the geometry 
-        std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)), 
-        // Number of B-spline coefficients of the variable 
-        std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)) );
+        linear_elasticity_t net(//simulation parameters 
+            lambda, mu, SUPERVISED_LEARNING, MAX_EPOCH, MIN_LOSS, 
+            BODY_FORCE, TFBC_SIDES, FORCE_SIDES, DIRI_SIDES, NR_CTRL_PTS, JSON_PATH, 
+            // Number of neurons per layer 
+            {25, 25}, 
+            // Activation functions 
+            {{iganet::activation::sigmoid}, {iganet::activation::sigmoid}, {iganet::activation::none}}, 
+            // Number of B-spline coefficients of the geometry 
+            std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)), 
+            // Number of B-spline coefficients of the variable 
+            std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)) );
 
+            
+    #ifdef IGANET_WITH_GISMO
         
-#ifdef IGANET_WITH_GISMO
-    
-    torch::Tensor gsOriginCtrlPts    = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-    torch::Tensor gsDisplacements    = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-    torch::Tensor gsCtrlPts          = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-    torch::Tensor gsStresses         = torch::empty({0, 1}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-    
-    nlohmann::json gsOriginCtrlPts_j = nlohmann::json::array();
-    nlohmann::json gsDisplacements_j = nlohmann::json::array();
-    nlohmann::json gsCtrlPts_j       = nlohmann::json::array();
-    nlohmann::json gsStresses_j      = nlohmann::json::array();
-
-    std::tie(gsOriginCtrlPts, gsDisplacements, gsStresses) =
-    linear_elasticity_t::RunGismoSimulation(
-        NR_CTRL_PTS, DEGREE, YOUNG_MODULUS, POISSON_RATIO,
-        DIRI_SIDES, FORCE_SIDES, BODY_FORCE);
-    
-    // calculate the new position of the control points after displacement
-    gsCtrlPts = gsOriginCtrlPts + gsDisplacements;
-
-    for (int i = 0; i < gsCtrlPts.size(0); ++i) {
-        gsOriginCtrlPts_j.push_back({
-            gsOriginCtrlPts[i][0].item<double>(),
-            gsOriginCtrlPts[i][1].item<double>()
-        });
+        torch::Tensor gsOriginCtrlPts    = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+        torch::Tensor gsDisplacements    = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+        torch::Tensor gsCtrlPts          = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+        torch::Tensor gsStresses         = torch::empty({0, 1}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
         
-        gsDisplacements_j.push_back({
-            gsDisplacements[i][0].item<double>(),
-            gsDisplacements[i][1].item<double>()
-        });
+        nlohmann::json gsOriginCtrlPts_j = nlohmann::json::array();
+        nlohmann::json gsDisplacements_j = nlohmann::json::array();
+        nlohmann::json gsCtrlPts_j       = nlohmann::json::array();
+        nlohmann::json gsStresses_j      = nlohmann::json::array();
 
-        gsCtrlPts_j.push_back({
-            gsCtrlPts[i][0].item<double>(),
-            gsCtrlPts[i][1].item<double>()
-        });
+        std::tie(gsOriginCtrlPts, gsDisplacements, gsStresses) =
+        linear_elasticity_t::RunGismoSimulation(
+            NR_CTRL_PTS, DEGREE, YOUNG_MODULUS, POISSON_RATIO,
+            DIRI_SIDES, FORCE_SIDES, BODY_FORCE);
+        
+        // calculate the new position of the control points after displacement
+        gsCtrlPts = gsOriginCtrlPts + gsDisplacements;
 
-        gsStresses_j.push_back({ 
-            gsStresses[i][0].item<double>() 
-        });
-    }
-
-    net.appendToJsonFile("gsOriginCtrlPts", gsOriginCtrlPts_j);
-    net.appendToJsonFile("gsDisplacements", gsDisplacements_j);
-    net.appendToJsonFile("gsCtrlPts", gsCtrlPts_j);
-    net.appendToJsonFile("gsStresses", gsStresses_j);
-
-    if (RUN_REF_SIM) {
-        torch::Tensor gsRefOriginCtrlPts    = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-        torch::Tensor gsRefCtrlPts          = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-        torch::Tensor gsRefDisplacements    = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-        torch::Tensor gsRefStresses         = torch::empty({0, 1}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-
-        nlohmann::json gsRefOriginCtrlPts_j = nlohmann::json::array();
-        nlohmann::json gsRefCtrlPts_j       = nlohmann::json::array();
-        nlohmann::json gsRefDisplacements_j = nlohmann::json::array();
-        nlohmann::json gsRefStresses_j      = nlohmann::json::array();
-
-        std::tie(gsRefOriginCtrlPts, gsRefDisplacements, gsRefStresses) =
-            linear_elasticity_t::RunGismoSimulation(
-                NR_CTRL_PTS_REF, DEGREE,
-                YOUNG_MODULUS, POISSON_RATIO,
-                DIRI_SIDES, FORCE_SIDES, BODY_FORCE);
-
-        // calculate the new position of the reference solution's control points after displacement        
-        gsRefCtrlPts = gsRefOriginCtrlPts + gsRefDisplacements;
-
-        for (int i = 0; i < gsRefCtrlPts.size(0); ++i) {
-            gsRefOriginCtrlPts_j.push_back({
-                gsRefOriginCtrlPts[i][0].item<double>(),
-                gsRefOriginCtrlPts[i][1].item<double>()
-            });
-
-            gsRefCtrlPts_j.push_back({
-                gsRefCtrlPts[i][0].item<double>(),
-                gsRefCtrlPts[i][1].item<double>()
-            });
-
-            gsRefDisplacements_j.push_back({
-                gsRefDisplacements[i][0].item<double>(),
-                gsRefDisplacements[i][1].item<double>()
+        for (int i = 0; i < gsCtrlPts.size(0); ++i) {
+            gsOriginCtrlPts_j.push_back({
+                gsOriginCtrlPts[i][0].item<double>(),
+                gsOriginCtrlPts[i][1].item<double>()
             });
             
-            gsRefStresses_j.push_back({ 
-                gsRefStresses[i][0].item<double>() 
+            gsDisplacements_j.push_back({
+                gsDisplacements[i][0].item<double>(),
+                gsDisplacements[i][1].item<double>()
+            });
+
+            gsCtrlPts_j.push_back({
+                gsCtrlPts[i][0].item<double>(),
+                gsCtrlPts[i][1].item<double>()
+            });
+
+            gsStresses_j.push_back({ 
+                gsStresses[i][0].item<double>() 
             });
         }
 
-        net.appendToJsonFile("gsRefOriginCtrlPts", gsRefOriginCtrlPts_j);
-        net.appendToJsonFile("gsRefCtrlPts", gsRefCtrlPts_j);
-        net.appendToJsonFile("gsRefDisplacements", gsRefDisplacements_j);
-        net.appendToJsonFile("gsRefStresses", gsRefStresses_j);
-        net.appendToJsonFile("gsRefDegree", DEGREE_REF);
-    }
-#endif
+        net.appendToJsonFile("gsOriginCtrlPts", gsOriginCtrlPts_j);
+        net.appendToJsonFile("gsDisplacements", gsDisplacements_j);
+        net.appendToJsonFile("gsCtrlPts", gsCtrlPts_j);
+        net.appendToJsonFile("gsStresses", gsStresses_j);
 
+        if (RUN_REF_SIM) {
+            torch::Tensor gsRefOriginCtrlPts    = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+            torch::Tensor gsRefCtrlPts          = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+            torch::Tensor gsRefDisplacements    = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+            torch::Tensor gsRefStresses         = torch::empty({0, 1}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
 
-    // imposing body force
-    net.f().transform([=](const std::array<real_t, 2> xi) {
-        return std::array<real_t, 2>{BODY_FORCE.first, BODY_FORCE.second};
-    });
+            nlohmann::json gsRefOriginCtrlPts_j = nlohmann::json::array();
+            nlohmann::json gsRefCtrlPts_j       = nlohmann::json::array();
+            nlohmann::json gsRefDisplacements_j = nlohmann::json::array();
+            nlohmann::json gsRefStresses_j      = nlohmann::json::array();
 
-    // get the coefficients of the control points
-    torch::Tensor ctrlPtsCoeffs = net.G().as_tensor().slice(0, 0, NR_CTRL_PTS);
-    nlohmann::json ctrlPtsCoeffs_j = nlohmann::json::array();
-    for (int i = 0; i < NR_CTRL_PTS; ++i) {
-        ctrlPtsCoeffs_j.push_back({ctrlPtsCoeffs[i].item<double>()});
-    }
-    net.appendToJsonFile("net_ctrlPtsCoeffs", ctrlPtsCoeffs_j);
+            std::tie(gsRefOriginCtrlPts, gsRefDisplacements, gsRefStresses) =
+                linear_elasticity_t::RunGismoSimulation(
+                    NR_CTRL_PTS_REF, DEGREE,
+                    YOUNG_MODULUS, POISSON_RATIO,
+                    DIRI_SIDES, FORCE_SIDES, BODY_FORCE);
 
-    // run through all DIRI_SIDES
-    for (const auto& side : DIRI_SIDES) {
-        int sideNr = std::get<0>(side);
-        double xDispl = std::get<1>(side);
-        double yDispl = std::get<2>(side);
+            // calculate the new position of the reference solution's control points after displacement        
+            gsRefCtrlPts = gsRefOriginCtrlPts + gsRefDisplacements;
 
-        switch (sideNr) {
-            case 1:
-                net.ref().boundary().side<1>().transform<1>(
-                    [=](const std::array<real_t, 1> &xi) {
-                        return std::array<real_t, 1>{xDispl};
-                    },
-                    std::array<iganet::short_t, 1>{0} 
-                );
-                net.ref().boundary().side<1>().transform<1>(
-                    [=](const std::array<real_t, 1> &xi) {
-                        return std::array<real_t, 1>{yDispl};
-                    },
-                    std::array<iganet::short_t, 1>{1}
-                );
-                break;
-            case 2:
-                net.ref().boundary().side<2>().transform<1>(
-                    [=](const std::array<real_t, 1> &xi) {
-                        return std::array<real_t, 1>{xDispl};
-                    },
-                    std::array<iganet::short_t, 1>{0} 
-                );
-                net.ref().boundary().side<2>().transform<1>(
-                    [=](const std::array<real_t, 1> &xi) {
-                        return std::array<real_t, 1>{yDispl};
-                    },
-                    std::array<iganet::short_t, 1>{1}
-                );
-                break;
-            case 3:
-                net.ref().boundary().side<3>().transform<1>(
-                    [=](const std::array<real_t, 1> &xi) {
-                        return std::array<real_t, 1>{xDispl};
-                    },
-                    std::array<iganet::short_t, 1>{0} 
-                );
-                net.ref().boundary().side<3>().transform<1>(
-                    [=](const std::array<real_t, 1> &xi) {
-                        return std::array<real_t, 1>{yDispl};
-                    },
-                    std::array<iganet::short_t, 1>{1}
-                );
-                break;
-            case 4:
-                net.ref().boundary().side<4>().transform<1>(
-                    [=](const std::array<real_t, 1> &xi) {
-                        return std::array<real_t, 1>{xDispl};
-                    },
-                    std::array<iganet::short_t, 1>{0} 
-                );
-                net.ref().boundary().side<4>().transform<1>(
-                    [=](const std::array<real_t, 1> &xi) {
-                        return std::array<real_t, 1>{yDispl};
-                    },
-                    std::array<iganet::short_t, 1>{1}
-                );
-                break;
-            default:
-                std::cerr << "Error: Invalid side number " << sideNr << std::endl;
+            for (int i = 0; i < gsRefCtrlPts.size(0); ++i) {
+                gsRefOriginCtrlPts_j.push_back({
+                    gsRefOriginCtrlPts[i][0].item<double>(),
+                    gsRefOriginCtrlPts[i][1].item<double>()
+                });
+
+                gsRefCtrlPts_j.push_back({
+                    gsRefCtrlPts[i][0].item<double>(),
+                    gsRefCtrlPts[i][1].item<double>()
+                });
+
+                gsRefDisplacements_j.push_back({
+                    gsRefDisplacements[i][0].item<double>(),
+                    gsRefDisplacements[i][1].item<double>()
+                });
+                
+                gsRefStresses_j.push_back({ 
+                    gsRefStresses[i][0].item<double>() 
+                });
+            }
+
+            net.appendToJsonFile("gsRefOriginCtrlPts", gsRefOriginCtrlPts_j);
+            net.appendToJsonFile("gsRefCtrlPts", gsRefCtrlPts_j);
+            net.appendToJsonFile("gsRefDisplacements", gsRefDisplacements_j);
+            net.appendToJsonFile("gsRefStresses", gsRefStresses_j);
+            net.appendToJsonFile("gsRefDegree", DEGREE_REF);
         }
-    }
-
-    // Set maximum number of epochs
-    net.options().max_epoch(MAX_EPOCH);
-
-    // Set tolerance for the loss functions
-    net.options().min_loss(MIN_LOSS);
-
-    // Start time measurement
-    auto t1 = std::chrono::high_resolution_clock::now();
-
-    // Train network
-    net.train();
-
-    // Stop time measurement
-    auto t2 = std::chrono::high_resolution_clock::now();
-    iganet::Log(iganet::log::info)
-        << "Training took "
-        << std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1)
-                .count()
-        << " seconds\n";
-
-    // PARAMETRIZATION OF THE NETWORK
-
-    //   // change original geometry
-    //   auto& Gspace = net.G().space();
-    //   auto& coeffs = Gspace.coeffs(0);
-    //   std::cout << coeffs.size(0) << std::endl;
-    //   // add a oscillation to the coefficients
-    //   for (int64_t i = 0; i < coeffs.size(0); ++i) {
-    //       coeffs.index_put_({i}, coeffs.index({i}) + 0.05 * std::sin(0.1 * i));
-    //   }
-    //   // evaluate the new solution
-    //   net.eval();
-
-#ifdef IGANET_WITH_MATPLOT
-    auto Gdef = net.G().space() + net.u().space();
-
-    auto f = Gdef.plot();
-
-    // 1) same aspect ratio for x and y axis
-    f->backend()->run_command("set size ratio -1");
-
-    // 2) add some margins
-    f->backend()->run_command("set offsets graph 0.06, graph 0.06, graph 0.06, graph 0.06");
-
-    // f->backend()->run_command("set autoscale");
-
-    f->save("deformed_geometry.pdf");
-#endif
+    #endif
 
 
-    // PROCESSING NETWORK OUTPUT FOR SPLINEPY
-
-    // get the geometry and displacement as tensors
-    torch::Tensor geometryAsTensor = net.G().as_tensor();
-    torch::Tensor displacementAsTensor = net.u().as_tensor();
-    
-    // creating collection matrix for all the control points (iganet)
-    torch::Tensor netCtrlPts = torch::zeros({NR_CTRL_PTS * NR_CTRL_PTS, 2});
-    // creating collection matrix for all the displacements (iganet)
-    torch::Tensor netDisplacements = torch::zeros({NR_CTRL_PTS * NR_CTRL_PTS, 2});
-
-    // filling the collection matrices with the values from the tensors
-    for (int i = 0; i < NR_CTRL_PTS * NR_CTRL_PTS; ++i) {
-        double x = geometryAsTensor[i].item<double>();          
-        double y = geometryAsTensor[i + NR_CTRL_PTS * NR_CTRL_PTS].item<double>();
-        netCtrlPts[i][0] = x;
-        netCtrlPts[i][1] = y;
-            
-        double ux = displacementAsTensor[i].item<double>();
-        double uy = displacementAsTensor[i + NR_CTRL_PTS * NR_CTRL_PTS].item<double>();
-        netDisplacements[i][0] = ux;
-        netDisplacements[i][1] = uy;
-    }
-
-    // deformed position of the control points (IgANet always)
-    torch::Tensor displacedNetCtrlPts = netCtrlPts + netDisplacements;
-
-    // json objects for deformed positions
-    nlohmann::json displacedNetCtrlPts_j = nlohmann::json::array();
-    for (int i = 0; i < displacedNetCtrlPts.size(0); ++i) {
-        displacedNetCtrlPts_j.push_back({
-            displacedNetCtrlPts[i][0].item<double>(),
-            displacedNetCtrlPts[i][1].item<double>()
+        // imposing body force
+        net.f().transform([=](const std::array<real_t, 2> xi) {
+            return std::array<real_t, 2>{BODY_FORCE.first, BODY_FORCE.second};
         });
+
+        // get the coefficients of the control points
+        torch::Tensor ctrlPtsCoeffs = net.G().as_tensor().slice(0, 0, NR_CTRL_PTS);
+        nlohmann::json ctrlPtsCoeffs_j = nlohmann::json::array();
+        for (int i = 0; i < NR_CTRL_PTS; ++i) {
+            ctrlPtsCoeffs_j.push_back({ctrlPtsCoeffs[i].item<double>()});
+        }
+        net.appendToJsonFile("net_ctrlPtsCoeffs", ctrlPtsCoeffs_j);
+
+        // run through all DIRI_SIDES
+        for (const auto& side : DIRI_SIDES) {
+            int sideNr = std::get<0>(side);
+            double xDispl = std::get<1>(side);
+            double yDispl = std::get<2>(side);
+
+            switch (sideNr) {
+                case 1:
+                    net.ref().boundary().template side<1>().template transform<1>(
+                        [=](const std::array<real_t, 1> &xi) {
+                            return std::array<real_t, 1>{xDispl};
+                        },
+                        std::array<iganet::short_t, 1>{0} 
+                    );
+                    net.ref().boundary().template side<1>().template transform<1>(
+                        [=](const std::array<real_t, 1> &xi) {
+                            return std::array<real_t, 1>{yDispl};
+                        },
+                        std::array<iganet::short_t, 1>{1}
+                    );
+                    break;
+                case 2:
+                    net.ref().boundary().template side<2>().template transform<1>(
+                        [=](const std::array<real_t, 1> &xi) {
+                            return std::array<real_t, 1>{xDispl};
+                        },
+                        std::array<iganet::short_t, 1>{0} 
+                    );
+                    net.ref().boundary().template side<2>().template transform<1>(
+                        [=](const std::array<real_t, 1> &xi) {
+                            return std::array<real_t, 1>{yDispl};
+                        },
+                        std::array<iganet::short_t, 1>{1}
+                    );
+                    break;
+                case 3:
+                    net.ref().boundary().template side<3>().template transform<1>(
+                        [=](const std::array<real_t, 1> &xi) {
+                            return std::array<real_t, 1>{xDispl};
+                        },
+                        std::array<iganet::short_t, 1>{0} 
+                    );
+                    net.ref().boundary().template side<3>().template transform<1>(
+                        [=](const std::array<real_t, 1> &xi) {
+                            return std::array<real_t, 1>{yDispl};
+                        },
+                        std::array<iganet::short_t, 1>{1}
+                    );
+                    break;
+                case 4:
+                    net.ref().boundary().template side<4>().template transform<1>(
+                        [=](const std::array<real_t, 1> &xi) {
+                            return std::array<real_t, 1>{xDispl};
+                        },
+                        std::array<iganet::short_t, 1>{0} 
+                    );
+                    net.ref().boundary().template side<4>().template transform<1>(
+                        [=](const std::array<real_t, 1> &xi) {
+                            return std::array<real_t, 1>{yDispl};
+                        },
+                        std::array<iganet::short_t, 1>{1}
+                    );
+                    break;
+                default:
+                    std::cerr << "Error: Invalid side number " << sideNr << std::endl;
+            }
+        }
+
+        // Set maximum number of epochs
+        net.options().max_epoch(MAX_EPOCH);
+
+        // Set tolerance for the loss functions
+        net.options().min_loss(MIN_LOSS);
+
+        // Start time measurement
+        auto t1 = std::chrono::high_resolution_clock::now();
+
+        // Train network
+        net.train();
+
+        // Stop time measurement
+        auto t2 = std::chrono::high_resolution_clock::now();
+        iganet::Log(iganet::log::info)
+            << "Training took "
+            << std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1)
+                    .count()
+            << " seconds\n";
+
+        // PARAMETRIZATION OF THE NETWORK
+
+        //   // change original geometry
+        //   auto& Gspace = net.G().space();
+        //   auto& coeffs = Gspace.coeffs(0);
+        //   std::cout << coeffs.size(0) << std::endl;
+        //   // add a oscillation to the coefficients
+        //   for (int64_t i = 0; i < coeffs.size(0); ++i) {
+        //       coeffs.index_put_({i}, coeffs.index({i}) + 0.05 * std::sin(0.1 * i));
+        //   }
+        //   // evaluate the new solution
+        //   net.eval();
+
+    #ifdef IGANET_WITH_MATPLOT
+        auto Gdef = net.G().space() + net.u().space();
+
+        auto f = Gdef.plot();
+
+        // 1) same aspect ratio for x and y axis
+        f->backend()->run_command("set size ratio -1");
+
+        // 2) add some margins
+        f->backend()->run_command("set offsets graph 0.06, graph 0.06, graph 0.06, graph 0.06");
+
+        // f->backend()->run_command("set autoscale");
+
+        f->save("deformed_geometry.pdf");
+    #endif
+
+
+        // PROCESSING NETWORK OUTPUT FOR SPLINEPY
+
+        // get the geometry and displacement as tensors
+        torch::Tensor geometryAsTensor = net.G().as_tensor();
+        torch::Tensor displacementAsTensor = net.u().as_tensor();
+        
+        // creating collection matrix for all the control points (iganet)
+        torch::Tensor netCtrlPts = torch::zeros({NR_CTRL_PTS * NR_CTRL_PTS, 2});
+        // creating collection matrix for all the displacements (iganet)
+        torch::Tensor netDisplacements = torch::zeros({NR_CTRL_PTS * NR_CTRL_PTS, 2});
+
+        // filling the collection matrices with the values from the tensors
+        for (int i = 0; i < NR_CTRL_PTS * NR_CTRL_PTS; ++i) {
+            double x = geometryAsTensor[i].item<double>();          
+            double y = geometryAsTensor[i + NR_CTRL_PTS * NR_CTRL_PTS].item<double>();
+            netCtrlPts[i][0] = x;
+            netCtrlPts[i][1] = y;
+                
+            double ux = displacementAsTensor[i].item<double>();
+            double uy = displacementAsTensor[i + NR_CTRL_PTS * NR_CTRL_PTS].item<double>();
+            netDisplacements[i][0] = ux;
+            netDisplacements[i][1] = uy;
+        }
+
+        // deformed position of the control points (IgANet always)
+        torch::Tensor displacedNetCtrlPts = netCtrlPts + netDisplacements;
+
+        // json objects for deformed positions
+        nlohmann::json displacedNetCtrlPts_j = nlohmann::json::array();
+        for (int i = 0; i < displacedNetCtrlPts.size(0); ++i) {
+            displacedNetCtrlPts_j.push_back({
+                displacedNetCtrlPts[i][0].item<double>(),
+                displacedNetCtrlPts[i][1].item<double>()
+            });
+        }
+
+        // write net data (always)
+        net.appendToJsonFile("net_CtrlPts", displacedNetCtrlPts_j);
+        net.appendToJsonFile("net_Degree", DEGREE);
+    };
+    
+    switch (DEGREE_CFG) {
+    case 2: return run.template operator()<2>();
+    case 3: return run.template operator()<3>();
+    case 4: return run.template operator()<4>();
+    case 5: return run.template operator()<5>();
+    case 6: return run.template operator()<6>();
+    default: std::cerr << "Error: Invalid degree " << DEGREE_CFG << " (2..6)\n" << std::endl;
+        return 1;
     }
 
-    // write net data (always)
-    net.appendToJsonFile("net_CtrlPts", displacedNetCtrlPts_j);
-    net.appendToJsonFile("net_Degree", DEGREE);
-    
     iganet::finalize();
     return 0;
 }
