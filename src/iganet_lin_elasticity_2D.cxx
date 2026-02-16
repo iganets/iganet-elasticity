@@ -56,7 +56,7 @@ public:
     /// @brief Constructor
     template <typename... Args>
     linear_elasticity(double lambda, double mu, bool SUPERVISED_LEARNING, int MAX_EPOCH, 
-                    double MIN_LOSS, const torch::optim::LBFGSOptions& solver_opts, std::vector<int> TFBC_SIDES,
+                    double MIN_LOSS, std::vector<double> BODY_FORCE, std::vector<int> TFBC_SIDES,
                     std::vector<std::tuple<int, double, double>> FORCE_SIDES,
                     std::vector<std::tuple<int, double, double>> DIRI_SIDES, 
                     int64_t NR_CTRL_PTS, std::string JSON_PATH, std::vector<int64_t> &&layers, 
@@ -65,7 +65,7 @@ public:
                 std::forward<std::vector<std::vector<std::any>>>(activations),
                 std::forward<Args>(args)...),
                 lambda_(lambda), mu_(mu), SUPERVISED_LEARNING_(SUPERVISED_LEARNING), MAX_EPOCH_(MAX_EPOCH), 
-                MIN_LOSS_(MIN_LOSS), TFBC_SIDES_(TFBC_SIDES), FORCE_SIDES_(FORCE_SIDES), 
+                MIN_LOSS_(MIN_LOSS), BODY_FORCE_(BODY_FORCE), TFBC_SIDES_(TFBC_SIDES), FORCE_SIDES_(FORCE_SIDES), 
                 DIRI_SIDES_(DIRI_SIDES), NR_CTRL_PTS_(NR_CTRL_PTS), JSON_PATH_(std::move(JSON_PATH)), 
                 ref_(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)) {}
 
@@ -142,20 +142,20 @@ public:
         file >> jsonData;
         file.close();
     
-        // extract the matlabDisplacements array
-        auto matlabDisplacements_j = jsonData["matlabDisplacements"];
-        int numCtrlPts = matlabDisplacements_j.size();
+        // extract the stdCollDisplacement array
+        auto stdCollDisplacements_j = jsonData["stdCollDisplacement"];
+        int nrStdCollCtrlPts = stdCollDisplacements_j.size();
     
         // create a tensor for the displacements
-        torch::Tensor matlabDisplacements = torch::empty({numCtrlPts, 2}, options);
+        torch::Tensor stdCollDisplacement = torch::empty({nrStdCollCtrlPts, 2}, options);
     
         // fill the tensor with data from the JSON file
-        for (int i = 0; i < numCtrlPts; ++i) {
-            matlabDisplacements[i][0] = matlabDisplacements_j[i][0].get<double>();
-            matlabDisplacements[i][1] = matlabDisplacements_j[i][1].get<double>();
+        for (int i = 0; i < nrStdCollCtrlPts; ++i) {
+            stdCollDisplacement[i][0] = stdCollDisplacements_j[i][0].get<double>();
+            stdCollDisplacement[i][1] = stdCollDisplacements_j[i][1].get<double>();
         }
     
-        return matlabDisplacements;
+        return stdCollDisplacement;
     }
 
     /// @brief helper function to calculate the Greville abscissae
@@ -869,10 +869,10 @@ public:
             }, 1);
 
             // load the displacements from the matlab solution
-            torch::Tensor matlabDisplacements_ = loadDisplacements();
+            torch::Tensor stdCollDisplacements_ = loadDisplacements();
 
             // supervised loss: MSE gegen matlab-Kontrollpunkte
-            gsLoss = 1e9 * torch::mse_loss(netDisplacements_, matlabDisplacements_);
+            gsLoss = 1e9 * torch::mse_loss(netDisplacements_, stdCollDisplacements_);
 
             // calculation of the loss function for double-sided constraint solid
             // div(sigma) + f = 0 --> div(sigma) = -f
@@ -1102,14 +1102,6 @@ int main() {
 
     // body force (constant over the whole domain)
     std::pair<double, double> BODY_FORCE = {0.0, 0.0}; // {fx, fy}
-    
-    auto solver_options = torch::optim::LBFGSOptions(1.0).
-                                        max_iter(50).
-                                        max_eval(75).
-                                        history_size(200).
-                                        tolerance_grad(1e-12).
-                                        tolerance_change(1e-12).
-                                        line_search_fn("strong_wolfe");
 
     bool wanted_to_use_config = false;
     if(wanted_to_use_config) {                                   // OPTIONAL .json input for easy change of params. no need to rebuild :)
@@ -1183,7 +1175,7 @@ int main() {
 
     linear_elasticity_t net(//simulation parameters 
         lambda, mu, SUPERVISED_LEARNING, MAX_EPOCH, MIN_LOSS, 
-        solver_options, TFBC_SIDES, FORCE_SIDES, DIRI_SIDES, NR_CTRL_PTS, JSON_PATH, 
+        BODY_FORCE, TFBC_SIDES, FORCE_SIDES, DIRI_SIDES, NR_CTRL_PTS, JSON_PATH, 
         // Number of neurons per layer 
         {25, 25}, 
         // Activation functions 
