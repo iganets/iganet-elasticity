@@ -131,7 +131,7 @@ public:
         }
     }
 
-    /// @brief helper function to load the matlab displacements from a JSON file
+    /// @brief helper function to load the std collocation displacements from a JSON file
     torch::Tensor loadDisplacements() {
         // create options for the tensor
         auto options = torch::TensorOptions().dtype(torch::kDouble).device(torch::kCPU);
@@ -864,7 +864,7 @@ public:
             // create command line output variable for all the different losses
             std::ostringstream singleLossOutput;
         
-            // preprocess the outputs for comparison with the matlab solution
+            // preprocess the outputs for comparison with the std collocation solution
             torch::Tensor modifiedOutputs = outputs * 1.0;
         
             // create netDisplacements_ from slices of modifiedOutputs
@@ -873,10 +873,10 @@ public:
                 modifiedOutputs.slice(0, outputs.size(0) / 2, outputs.size(0)),
             }, 1);
 
-            // load the displacements from the matlab solution
+            // load the displacements from the std collocation solution
             torch::Tensor stdCollDisplacements_ = loadDisplacements();
 
-            // supervised loss: MSE gegen matlab-Kontrollpunkte
+            // supervised loss: MSE of net against standard collocation solution
             gsLoss = 1e9 * torch::mse_loss(netDisplacements_, stdCollDisplacements_);
 
             // calculation of the loss function for double-sided constraint solid
@@ -1074,8 +1074,6 @@ int main() {
     iganet::init();
     iganet::verbose(std::cout);
 
-    // ------- USER INPUTS (mandatory from config) ------- //
-
     // resolve paths relative to repo root
     std::filesystem::path repo_root;
     try {
@@ -1103,6 +1101,16 @@ int main() {
         return 1;
     }
 
+    // run standard collocation simulation with the parameters from the config file 
+    const std::string cmd =
+        "cd \"" + repo_root.string() + "\" && python3 run_std_coll.py";
+
+    const int ret = std::system(cmd.c_str());
+    if (ret != 0) {
+        std::cerr << "ERROR: python reference run (run_std_coll.py) failed. system() returned " << ret << "\n";
+        return 1;
+    }
+
     // material parameters
     double YOUNG_MODULUS = 0.0;
     double POISSON_RATIO = 0.0;
@@ -1114,7 +1122,8 @@ int main() {
     std::string JSON_PATH;  // result.json path (output)
 
     // reference simulation parameters
-    bool RUN_REF_SIM = false;
+    bool RUN_GS_REF_SIM = false;
+    bool RUN_COLL_REF_SIM = false;
     int NR_CTRL_PTS_REF = 0;
     int DEGREE_REF = 0;
 
@@ -1169,7 +1178,8 @@ int main() {
 
         // reference simulation (only if present in config)
         if (j.contains("reference_simulation")) {
-            RUN_REF_SIM = require(j, "reference_simulation.run").get<bool>();
+            RUN_GS_REF_SIM = require(j, "reference_simulation.run_gs_ref_sim").get<bool>();
+            RUN_COLL_REF_SIM = require(j, "reference_simulation.run_coll_ref_sim").get<bool>();
             NR_CTRL_PTS_REF = require(j, "reference_simulation.nr_ctrl_pts_ref").get<int>();
             DEGREE_REF = require(j, "reference_simulation.degree_ref").get<int>();
         }
@@ -1203,103 +1213,6 @@ int main() {
             std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)), 
             // Number of B-spline coefficients of the variable 
             std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)) );
-
-            
-    #ifdef IGANET_WITH_GISMO
-        
-        torch::Tensor gsOriginCtrlPts    = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-        torch::Tensor gsDisplacements    = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-        torch::Tensor gsCtrlPts          = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-        torch::Tensor gsStresses         = torch::empty({0, 1}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-        
-        nlohmann::json gsOriginCtrlPts_j = nlohmann::json::array();
-        nlohmann::json gsDisplacements_j = nlohmann::json::array();
-        nlohmann::json gsCtrlPts_j       = nlohmann::json::array();
-        nlohmann::json gsStresses_j      = nlohmann::json::array();
-
-        std::tie(gsOriginCtrlPts, gsDisplacements, gsStresses) =
-        linear_elasticity_t::RunGismoSimulation(
-            NR_CTRL_PTS, DEGREE, YOUNG_MODULUS, POISSON_RATIO,
-            DIRI_SIDES, FORCE_SIDES, BODY_FORCE);
-        
-        // calculate the new position of the control points after displacement
-        gsCtrlPts = gsOriginCtrlPts + gsDisplacements;
-
-        for (int i = 0; i < gsCtrlPts.size(0); ++i) {
-            gsOriginCtrlPts_j.push_back({
-                gsOriginCtrlPts[i][0].item<double>(),
-                gsOriginCtrlPts[i][1].item<double>()
-            });
-            
-            gsDisplacements_j.push_back({
-                gsDisplacements[i][0].item<double>(),
-                gsDisplacements[i][1].item<double>()
-            });
-
-            gsCtrlPts_j.push_back({
-                gsCtrlPts[i][0].item<double>(),
-                gsCtrlPts[i][1].item<double>()
-            });
-
-            gsStresses_j.push_back({ 
-                gsStresses[i][0].item<double>() 
-            });
-        }
-
-        net.appendToJsonFile("gsOriginCtrlPts", gsOriginCtrlPts_j);
-        net.appendToJsonFile("gsDisplacements", gsDisplacements_j);
-        net.appendToJsonFile("gsCtrlPts", gsCtrlPts_j);
-        net.appendToJsonFile("gsStresses", gsStresses_j);
-
-        if (RUN_REF_SIM) {
-            torch::Tensor gsRefOriginCtrlPts    = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-            torch::Tensor gsRefCtrlPts          = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-            torch::Tensor gsRefDisplacements    = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-            torch::Tensor gsRefStresses         = torch::empty({0, 1}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-
-            nlohmann::json gsRefOriginCtrlPts_j = nlohmann::json::array();
-            nlohmann::json gsRefCtrlPts_j       = nlohmann::json::array();
-            nlohmann::json gsRefDisplacements_j = nlohmann::json::array();
-            nlohmann::json gsRefStresses_j      = nlohmann::json::array();
-
-            std::tie(gsRefOriginCtrlPts, gsRefDisplacements, gsRefStresses) =
-                linear_elasticity_t::RunGismoSimulation(
-                    NR_CTRL_PTS_REF, DEGREE,
-                    YOUNG_MODULUS, POISSON_RATIO,
-                    DIRI_SIDES, FORCE_SIDES, BODY_FORCE);
-
-            // calculate the new position of the reference solution's control points after displacement        
-            gsRefCtrlPts = gsRefOriginCtrlPts + gsRefDisplacements;
-
-            for (int i = 0; i < gsRefCtrlPts.size(0); ++i) {
-                gsRefOriginCtrlPts_j.push_back({
-                    gsRefOriginCtrlPts[i][0].item<double>(),
-                    gsRefOriginCtrlPts[i][1].item<double>()
-                });
-
-                gsRefCtrlPts_j.push_back({
-                    gsRefCtrlPts[i][0].item<double>(),
-                    gsRefCtrlPts[i][1].item<double>()
-                });
-
-                gsRefDisplacements_j.push_back({
-                    gsRefDisplacements[i][0].item<double>(),
-                    gsRefDisplacements[i][1].item<double>()
-                });
-                
-                gsRefStresses_j.push_back({ 
-                    gsRefStresses[i][0].item<double>() 
-                });
-            }
-
-            net.appendToJsonFile("gsRefOriginCtrlPts", gsRefOriginCtrlPts_j);
-            net.appendToJsonFile("gsRefCtrlPts", gsRefCtrlPts_j);
-            net.appendToJsonFile("gsRefDisplacements", gsRefDisplacements_j);
-            net.appendToJsonFile("gsRefStresses", gsRefStresses_j);
-            net.appendToJsonFile("gsRefDegree", DEGREE_REF);
-        }
-    #endif
-
 
         // imposing body force
         net.f().transform([=](const std::array<real_t, 2> xi) {
@@ -1402,36 +1315,6 @@ int main() {
                     .count()
             << " seconds\n";
 
-        // PARAMETRIZATION OF THE NETWORK
-
-        //   // change original geometry
-        //   auto& Gspace = net.G().space();
-        //   auto& coeffs = Gspace.coeffs(0);
-        //   std::cout << coeffs.size(0) << std::endl;
-        //   // add a oscillation to the coefficients
-        //   for (int64_t i = 0; i < coeffs.size(0); ++i) {
-        //       coeffs.index_put_({i}, coeffs.index({i}) + 0.05 * std::sin(0.1 * i));
-        //   }
-        //   // evaluate the new solution
-        //   net.eval();
-
-    #ifdef IGANET_WITH_MATPLOT
-        auto Gdef = net.G().space() + net.u().space();
-
-        auto f = Gdef.plot();
-
-        // 1) same aspect ratio for x and y axis
-        f->backend()->run_command("set size ratio -1");
-
-        // 2) add some margins
-        f->backend()->run_command("set offsets graph 0.06, graph 0.06, graph 0.06, graph 0.06");
-
-        // f->backend()->run_command("set autoscale");
-
-        f->save("deformed_geometry.pdf");
-    #endif
-
-
         // PROCESSING NETWORK OUTPUT FOR SPLINEPY
 
         // get the geometry and displacement as tensors
@@ -1456,7 +1339,7 @@ int main() {
             netDisplacements[i][1] = uy;
         }
 
-        // deformed position of the control points (IgANet always)
+        // deformed position of the control points
         torch::Tensor displacedNetCtrlPts = netCtrlPts + netDisplacements;
 
         // json objects for deformed positions
@@ -1468,9 +1351,112 @@ int main() {
             });
         }
 
-        // write net data (always)
+        // write net data
         net.appendToJsonFile("net_CtrlPts", displacedNetCtrlPts_j);
         net.appendToJsonFile("net_Degree", DEGREE);
+
+        #ifdef IGANET_WITH_GISMO
+        
+            torch::Tensor gsOriginCtrlPts    = torch::empty({0, 2}, 
+                torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+            torch::Tensor gsDisplacements    = torch::empty({0, 2}, 
+                torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+            torch::Tensor gsCtrlPts          = torch::empty({0, 2}, 
+                torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+            torch::Tensor gsStresses         = torch::empty({0, 1}, 
+                torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+            
+            nlohmann::json gsOriginCtrlPts_j = nlohmann::json::array();
+            nlohmann::json gsDisplacements_j = nlohmann::json::array();
+            nlohmann::json gsCtrlPts_j       = nlohmann::json::array();
+            nlohmann::json gsStresses_j      = nlohmann::json::array();
+
+            std::tie(gsOriginCtrlPts, gsDisplacements, gsStresses) =
+            linear_elasticity_t::RunGismoSimulation(
+                NR_CTRL_PTS, DEGREE, YOUNG_MODULUS, POISSON_RATIO,
+                DIRI_SIDES, FORCE_SIDES, BODY_FORCE);
+            
+            // calculate the new position of the control points after displacement
+            gsCtrlPts = gsOriginCtrlPts + gsDisplacements;
+
+            for (int i = 0; i < gsCtrlPts.size(0); ++i) {
+                gsOriginCtrlPts_j.push_back({
+                    gsOriginCtrlPts[i][0].item<double>(),
+                    gsOriginCtrlPts[i][1].item<double>()
+                });
+                
+                gsDisplacements_j.push_back({
+                    gsDisplacements[i][0].item<double>(),
+                    gsDisplacements[i][1].item<double>()
+                });
+
+                gsCtrlPts_j.push_back({
+                    gsCtrlPts[i][0].item<double>(),
+                    gsCtrlPts[i][1].item<double>()
+                });
+
+                gsStresses_j.push_back({ 
+                    gsStresses[i][0].item<double>() 
+                });
+            }
+
+            net.appendToJsonFile("gsOriginCtrlPts", gsOriginCtrlPts_j);
+            net.appendToJsonFile("gsDisplacements", gsDisplacements_j);
+            net.appendToJsonFile("gsCtrlPts", gsCtrlPts_j);
+            net.appendToJsonFile("gsStresses", gsStresses_j);
+
+            if (RUN_GS_REF_SIM) {
+                torch::Tensor gsRefOriginCtrlPts    = torch::empty({0, 2}, 
+                    torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+                torch::Tensor gsRefCtrlPts          = torch::empty({0, 2}, 
+                    torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+                torch::Tensor gsRefDisplacements    = torch::empty({0, 2}, 
+                    torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+                torch::Tensor gsRefStresses         = torch::empty({0, 1}, 
+                    torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+
+                nlohmann::json gsRefOriginCtrlPts_j = nlohmann::json::array();
+                nlohmann::json gsRefCtrlPts_j       = nlohmann::json::array();
+                nlohmann::json gsRefDisplacements_j = nlohmann::json::array();
+                nlohmann::json gsRefStresses_j      = nlohmann::json::array();
+
+                std::tie(gsRefOriginCtrlPts, gsRefDisplacements, gsRefStresses) =
+                    linear_elasticity_t::RunGismoSimulation(
+                        NR_CTRL_PTS_REF, DEGREE,
+                        YOUNG_MODULUS, POISSON_RATIO,
+                        DIRI_SIDES, FORCE_SIDES, BODY_FORCE);
+
+                // calculate the new position of the reference solution's control points after displacement        
+                gsRefCtrlPts = gsRefOriginCtrlPts + gsRefDisplacements;
+
+                for (int i = 0; i < gsRefCtrlPts.size(0); ++i) {
+                    gsRefOriginCtrlPts_j.push_back({
+                        gsRefOriginCtrlPts[i][0].item<double>(),
+                        gsRefOriginCtrlPts[i][1].item<double>()
+                    });
+
+                    gsRefCtrlPts_j.push_back({
+                        gsRefCtrlPts[i][0].item<double>(),
+                        gsRefCtrlPts[i][1].item<double>()
+                    });
+
+                    gsRefDisplacements_j.push_back({
+                        gsRefDisplacements[i][0].item<double>(),
+                        gsRefDisplacements[i][1].item<double>()
+                    });
+                    
+                    gsRefStresses_j.push_back({ 
+                        gsRefStresses[i][0].item<double>() 
+                    });
+                }
+
+                net.appendToJsonFile("gsRefOriginCtrlPts", gsRefOriginCtrlPts_j);
+                net.appendToJsonFile("gsRefCtrlPts", gsRefCtrlPts_j);
+                net.appendToJsonFile("gsRefDisplacements", gsRefDisplacements_j);
+                net.appendToJsonFile("gsRefStresses", gsRefStresses_j);
+                net.appendToJsonFile("gsRefDegree", DEGREE_REF);
+            }
+        #endif
     };
     
     switch (DEGREE_CFG) {
