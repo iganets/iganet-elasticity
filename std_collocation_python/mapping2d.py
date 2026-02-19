@@ -1,4 +1,4 @@
-# ref_collocation/mapping2d.py
+# std_collocation_python/mapping2d.py
 from __future__ import annotations
 import numpy as np
 

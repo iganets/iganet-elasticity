@@ -1,4 +1,4 @@
-# ref_collocation/bspline.py
+# std_collocation_python/bspline.py
 from __future__ import annotations
 import numpy as np
 
