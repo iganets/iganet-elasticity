@@ -11,40 +11,44 @@ using iganet_elasticity::utils::config::require;
 /// @brief Specialization of the IgANet class for linear elasticity in 2D
 template <typename Optimizer, typename GeometryMap, typename Variable>
 class linear_elasticity
-    : public iganet::v1::IgANet<Optimizer, GeometryMap, Variable>,
-      public iganet::v1::IgANetCustomizable<GeometryMap, Variable>
+    : public iganet::IgANet<Optimizer, std::tuple<GeometryMap>, std::tuple<Variable>>,
+      public iganet::IgANetCustomizable<std::tuple<GeometryMap>, std::tuple<Variable>>
 {
-    private:
-    using Base = iganet::v1::IgANet<Optimizer, GeometryMap, Variable>;
-    using Customizable = iganet::v1::IgANetCustomizable<GeometryMap, Variable>;
+private:
+    using Inputs  = std::tuple<GeometryMap>;
+    using Outputs = std::tuple<Variable>;
 
-    typename Base::variable_collPts_type collPts_; 
-    typename Base::variable_collPts_type interiorCollPts_;
+    using Base = iganet::IgANet<Optimizer, Inputs, Outputs>;
+    using Customizable = iganet::IgANetCustomizable<Inputs, Outputs>;
 
-    typename Customizable::variable_interior_knot_indices_type var_knot_indices_;
-    typename Customizable::variable_interior_coeff_indices_type var_coeff_indices_;
+    typename Base::template collPts_t<0> collPts_;
+    typename Base::template collPts_t<0> interiorCollPts_;
 
-    typename Customizable::variable_interior_knot_indices_type var_knot_indices_interior_;
-    typename Customizable::variable_interior_coeff_indices_type var_coeff_indices_interior_;
+    typename Customizable::template output_interior_knot_indices_t<0> var_knot_indices_;
+    typename Customizable::template output_interior_coeff_indices_t<0> var_coeff_indices_;
 
-    typename Customizable::variable_interior_knot_indices_type var_knot_indices_boundary_;
-    typename Customizable::variable_interior_coeff_indices_type var_coeff_indices_boundary_;
+    typename Customizable::template output_interior_knot_indices_t<0> var_knot_indices_interior_;
+    typename Customizable::template output_interior_coeff_indices_t<0> var_coeff_indices_interior_;
 
-    typename Customizable::geometryMap_interior_knot_indices_type G_knot_indices_;
-    typename Customizable::geometryMap_interior_coeff_indices_type G_coeff_indices_;
+    typename Customizable::template output_interior_knot_indices_t<0> var_knot_indices_boundary_;
+    typename Customizable::template output_interior_coeff_indices_t<0> var_coeff_indices_boundary_;
 
-    typename Customizable::geometryMap_interior_knot_indices_type G_knot_indices_interior_;
-    typename Customizable::geometryMap_interior_coeff_indices_type G_coeff_indices_interior_;
+    typename Customizable::template input_interior_knot_indices_t<0> G_knot_indices_;
+    typename Customizable::template input_interior_coeff_indices_t<0> G_coeff_indices_;
 
-    typename Customizable::geometryMap_interior_knot_indices_type G_knot_indices_boundary_;
-    typename Customizable::geometryMap_interior_coeff_indices_type G_coeff_indices_boundary_;
+    typename Customizable::template input_interior_knot_indices_t<0> G_knot_indices_interior_;
+    typename Customizable::template input_interior_coeff_indices_t<0> G_coeff_indices_interior_;
+
+    typename Customizable::template input_interior_knot_indices_t<0> G_knot_indices_boundary_;
+    typename Customizable::template input_interior_coeff_indices_t<0> G_coeff_indices_boundary_;
 
     // material properties - lame's parameters
     double lambda_;
     double mu_;
 
     int nrCollPts_; 
-    Variable ref_;
+    typename std::tuple_element_t<0, Outputs> ref_;
+
 
     // simulation parameters
     int MAX_EPOCH_;
@@ -74,11 +78,11 @@ public:
                 DIRI_SIDES_(DIRI_SIDES), NR_CTRL_PTS_(NR_CTRL_PTS), JSON_PATH_(std::move(JSON_PATH)), 
                 ref_(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)) {}
 
-    /// @brief Returns a constant reference to the collocation points
-    auto const &collPts() const { return collPts_; }
+    // /// @brief Returns a constant reference to the collocation points
+    // auto const &collPts() const { return collPts_; }
 
-    /// @brief Returns a constant reference to the interior collocation points
-    auto const &interiorCollPts() const { return interiorCollPts_; }
+    // /// @brief Returns a constant reference to the interior collocation points
+    // auto const &interiorCollPts() const { return interiorCollPts_; }
 
     /// @brief Returns a constant reference to the reference solution
     auto const &ref() const { return ref_; }
@@ -335,9 +339,10 @@ public:
 
         if (epoch == 0) {
             Base::inputs(epoch);
-            collPts_ = Base::variable_collPts(iganet::collPts::greville);
-            interiorCollPts_ = Base::variable_collPts(iganet::collPts::greville_interior);
-            
+            collPts_         = Base::template collPts<0>(iganet::collPts::greville);
+            interiorCollPts_ = Base::template collPts<0>(iganet::collPts::greville_interior);
+
+
             // WARNING, only works for equal number of control points in x and y direction
             nrCollPts_ = static_cast<int>(std::sqrt(std::get<0>(collPts_)[0].size(0)));
             torch::Tensor collPtsCoeffs = std::get<0>(collPts_)[0].slice(0, 0, nrCollPts_);
@@ -350,31 +355,31 @@ public:
             
 
             var_knot_indices_ =
-                Base::f_.template find_knot_indices<iganet::functionspace::interior>(
+                Base::template output<0>().template find_knot_indices<iganet::functionspace::interior>(
                     collPts_.first);
             var_coeff_indices_ =
-                Base::f_.template find_coeff_indices<iganet::functionspace::interior>(
+                Base::template output<0>().template find_coeff_indices<iganet::functionspace::interior>(
                     var_knot_indices_);
 
             var_knot_indices_interior_ =
-                Base::f_.template find_knot_indices<iganet::functionspace::interior>(
+                Base::template output<0>().template find_knot_indices<iganet::functionspace::interior>(
                         interiorCollPts_.first);
             var_coeff_indices_interior_ =
-                Base::f_.template find_coeff_indices<iganet::functionspace::interior>(
+                Base::template output<0>().template find_coeff_indices<iganet::functionspace::interior>(
                     var_knot_indices_interior_);
 
             G_knot_indices_ =
-                Base::G_.template find_knot_indices<iganet::functionspace::interior>(
+                this->template input<0>().template find_knot_indices<iganet::functionspace::interior>(
                     collPts_.first);
             G_coeff_indices_ =
-                Base::G_.template find_coeff_indices<iganet::functionspace::interior>(
+                this->template input<0>().template find_coeff_indices<iganet::functionspace::interior>(
                     G_knot_indices_);
 
             G_knot_indices_interior_ = 
-                Base::G_.template find_knot_indices<iganet::functionspace::interior>(
+                this->template input<0>().template find_knot_indices<iganet::functionspace::interior>(
                     interiorCollPts_.first);
             G_coeff_indices_interior_ =
-                Base::G_.template find_coeff_indices<iganet::functionspace::interior>(
+                this->template input<0>().template find_coeff_indices<iganet::functionspace::interior>(
                     G_knot_indices_interior_);
 
             return true;
@@ -388,7 +393,7 @@ public:
     torch::Tensor loss(const torch::Tensor &outputs, int64_t epoch) override {
 
         // create u_ from the training's outputs
-        Base::u_.from_tensor(outputs);
+        this->template output<0>().from_tensor(outputs);
 
         // pre-allocation of the loss values
         torch::Tensor totalLoss; 
@@ -634,21 +639,21 @@ public:
                     };
                 } 
                 var_knot_indices_boundary_ =
-                    Base::f_.template find_knot_indices<iganet::functionspace::interior>(
+                    Base::template output<0>().template find_knot_indices<iganet::functionspace::interior>(
                     tractionCollPts);
                 var_coeff_indices_boundary_ =
-                    Base::f_.template find_coeff_indices<iganet::functionspace::interior>(
+                    Base::template output<0>().template find_coeff_indices<iganet::functionspace::interior>(
                     var_knot_indices_boundary_);
                 G_knot_indices_boundary_ =
-                    Base::G_.template find_knot_indices<iganet::functionspace::interior>(
+                    this->template input<0>().template find_knot_indices<iganet::functionspace::interior>(
                         tractionCollPts);
                 G_coeff_indices_boundary_ =
-                Base::G_.template find_coeff_indices<iganet::functionspace::interior>(
+                this->template input<0>().template find_coeff_indices<iganet::functionspace::interior>(
                     G_knot_indices_boundary_);
             }  
 
             // calculate the jacobian of the affected boundary points
-            auto jacobianBoundary = Base::u_.ijac(Base::G_, tractionCollPts, 
+            auto jacobianBoundary = this->template output<0>().ijac(this->template input<0>(), tractionCollPts, 
                 var_knot_indices_boundary_, var_coeff_indices_boundary_,
                 G_knot_indices_boundary_, G_coeff_indices_boundary_);
             auto ux_x = *jacobianBoundary[0];
@@ -736,7 +741,7 @@ public:
         // LINEAR ELASTICITY EQUATION
 
         // calculation of the second derivatives of the displacements (u)
-        auto hessianColl = Base::u_.ihess(Base::G_, interiorCollPts_.first, 
+        auto hessianColl = this->template output<0>().ihess(this->template input<0>(), interiorCollPts_.first, 
             var_knot_indices_interior_, var_coeff_indices_interior_,
             G_knot_indices_interior_, G_coeff_indices_interior_);
 
@@ -770,12 +775,13 @@ public:
         // create a tensor of the divergence of the stress tensor
         torch::Tensor divStress = torch::stack({divStressX, divStressY}, /*dim=*/1);
 
-        // BODY FORCE
+        // BODY FORCE: constant vector (fx, fy)
+        auto opts = divStress.options();  // device + dtype passend zu divStress
 
-        // evaluate the reference body force f at all interior collocation points
-        auto f = Base::f_.eval(interiorCollPts_.first);
-
-        torch::Tensor bodyForce = torch::stack({*f[0], *f[1]}, /*dim=*/1).to(torch::kFloat32);
+        torch::Tensor bodyForce = torch::tensor(
+            {BODY_FORCE_.first, BODY_FORCE_.second},
+            opts
+        ).view({1, 2}).repeat({divStress.size(0), 1});   // (N,2)
 
         // UNSUPERVISED LEARNING (default)
         if (SUPERVISED_LEARNING_ == false) {
@@ -815,7 +821,7 @@ public:
                 bcLoss = torch::tensor(0.0);
 
                 // evaluation of the displacements at the boundary points
-                auto u_bdr = Base::u_.template eval<iganet::functionspace::boundary>(collPts_.second);
+                auto u_bdr = this->template output<0>().template eval<iganet::functionspace::boundary>(collPts_.second);
                 // evaluation of the displacements at the reference boundary points
                 auto bdr = ref_.template eval<iganet::functionspace::boundary>(collPts_.second);
 
@@ -912,7 +918,7 @@ public:
                 bcLoss = torch::tensor(0.0);
 
                 // evaluation of the displacements at the boundary points
-                auto u_bdr = Base::u_.template eval<iganet::functionspace::boundary>(collPts_.second);
+                auto u_bdr = this->template output<0>().template eval<iganet::functionspace::boundary>(collPts_.second);
                 // evaluation of the displacements at the reference boundary points
                 auto bdr = ref_.template eval<iganet::functionspace::boundary>(collPts_.second);
 
@@ -967,7 +973,7 @@ public:
             // STRESS CALCULATION
 
             // calculate the jacobian of the displacements (u) at the collocation points
-            auto jacobian = Base::u_.ijac(Base::G_, collPts_.first, var_knot_indices_, 
+            auto jacobian = this->template output<0>().ijac(this->template input<0>(), collPts_.first, var_knot_indices_, 
                 var_coeff_indices_, G_knot_indices_, G_coeff_indices_);
             
             auto ux_x = *jacobian[0];
@@ -1030,7 +1036,7 @@ public:
             // create a tensor of the collocation points
             torch::Tensor collPtsFirstAsTensor = torch::stack(
                 {std::get<0>(collPts_.first), std::get<1>(collPts_.first)}, 1);
-            auto displacementOfCollPts = Base::u_.eval(collPts_.first);
+            auto displacementOfCollPts = this->template output<0>().eval(collPts_.first);
             torch::Tensor displacementAsTensor = torch::stack(
                 {*(displacementOfCollPts[0]), *(displacementOfCollPts[1]) }, 1);
 
@@ -1215,12 +1221,12 @@ int main() {
             std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)) );
 
         // imposing body force
-        net.f().transform([=](const std::array<real_t, 2> xi) {
+        net.template output<0>().transform([=](const std::array<real_t, 2> xi) {
             return std::array<real_t, 2>{BODY_FORCE.first, BODY_FORCE.second};
         });
 
         // get the coefficients of the control points
-        torch::Tensor ctrlPtsCoeffs = net.G().as_tensor().slice(0, 0, NR_CTRL_PTS);
+        torch::Tensor ctrlPtsCoeffs = net.template input<0>().as_tensor().slice(0, 0, NR_CTRL_PTS);
         nlohmann::json ctrlPtsCoeffs_j = nlohmann::json::array();
         for (int i = 0; i < NR_CTRL_PTS; ++i) {
             ctrlPtsCoeffs_j.push_back({ctrlPtsCoeffs[i].item<double>()});
@@ -1318,8 +1324,8 @@ int main() {
         // PROCESSING NETWORK OUTPUT FOR SPLINEPY
 
         // get the geometry and displacement as tensors
-        torch::Tensor geometryAsTensor = net.G().as_tensor();
-        torch::Tensor displacementAsTensor = net.u().as_tensor();
+        torch::Tensor geometryAsTensor = net.template input<0>().as_tensor();
+        torch::Tensor displacementAsTensor = net.template output<0>().as_tensor();
         
         // creating collection matrix for all the control points (iganet)
         torch::Tensor netCtrlPts = torch::zeros({NR_CTRL_PTS * NR_CTRL_PTS, 2});
@@ -1457,6 +1463,7 @@ int main() {
                 net.appendToJsonFile("gsRefDegree", DEGREE_REF);
             }
         #endif
+        return 0;
     };
     
     switch (DEGREE_CFG) {
