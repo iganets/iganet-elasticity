@@ -4,8 +4,8 @@ import re
 import json
 import numpy as np
 
-from ref_collocation.iga_collocation import solve_elasticity_collocation_2d
-from ref_collocation.apply_bc import BC, BCConfig
+from std_collocation_python.iga_collocation import solve_elasticity_collocation_2d
+from std_collocation_python.apply_bc import BC, BCConfig
 
 # Side convention (match C++):
 # 1 = left, 2 = right, 3 = bottom, 4 = top

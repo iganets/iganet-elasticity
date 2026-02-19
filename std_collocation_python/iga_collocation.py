@@ -1,4 +1,4 @@
-# ref_collocation/iga_collocation.py
+# std_collocation_python/iga_collocation.py
 from __future__ import annotations
 import numpy as np
 from scipy.sparse import coo_matrix

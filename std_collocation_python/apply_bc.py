@@ -1,4 +1,4 @@
-# ref_collocation/apply_bc.py
+# std_collocation_python/apply_bc.py
 from __future__ import annotations
 from dataclasses import dataclass
 import numpy as np
