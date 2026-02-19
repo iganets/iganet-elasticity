@@ -1,6 +1,5 @@
 og*
 .vscode/
 build/
-show_iganet_2D.py
 result.json
 std_collocation_python/__pycache__/
