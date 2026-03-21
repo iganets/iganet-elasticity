@@ -71,13 +71,98 @@ private:
     std::string JSON_PATH_;
     bool SUPERVISED_LEARNING_;
 
+    bool isDirichletSide(int sideNr) const {
+    return std::any_of(
+        DIRI_SIDES_.begin(), DIRI_SIDES_.end(),
+        [&](const auto& t) { return std::get<0>(t) == sideNr; }
+    );
+}
+
+torch::Tensor buildDirichletKeepMask(int sideNr) const {
+    at::Tensor a, b;
+
+    // boundary point coordinates of the corresponding side
+    // side 1,2 -> local coords (y,z)
+    // side 3,4 -> local coords (x,z)
+    // side 5,6 -> local coords (x,y)
+    switch (sideNr) {
+        case 1:
+            a = std::get<0>(collPts_.second)[0];
+            b = std::get<0>(collPts_.second)[1];
+            break;
+        case 2:
+            a = std::get<1>(collPts_.second)[0];
+            b = std::get<1>(collPts_.second)[1];
+            break;
+        case 3:
+            a = std::get<2>(collPts_.second)[0];
+            b = std::get<2>(collPts_.second)[1];
+            break;
+        case 4:
+            a = std::get<3>(collPts_.second)[0];
+            b = std::get<3>(collPts_.second)[1];
+            break;
+        case 5:
+            a = std::get<4>(collPts_.second)[0];
+            b = std::get<4>(collPts_.second)[1];
+            break;
+        case 6:
+            a = std::get<5>(collPts_.second)[0];
+            b = std::get<5>(collPts_.second)[1];
+            break;
+        default:
+            throw std::invalid_argument("Dirichlet side must be 1..6.");
+    }
+
+    torch::Tensor keepMask = torch::ones(
+        {a.size(0)},
+        torch::TensorOptions().dtype(torch::kBool).device(a.device())
+    );
+
+    auto exclude_if_lower_dirichlet = [&](int otherSide, const at::Tensor& onOtherSide) {
+        if (isDirichletSide(otherSide) && otherSide < sideNr) {
+            keepMask = torch::logical_and(keepMask, torch::logical_not(onOtherSide));
+        }
+    };
+
+    switch (sideNr) {
+        // side 1,2: local coordinates are (y,z)
+        case 1:
+        case 2:
+            exclude_if_lower_dirichlet(3, torch::isclose(a, torch::zeros_like(a))); // y=0
+            exclude_if_lower_dirichlet(4, torch::isclose(a, torch::ones_like(a)));  // y=1
+            exclude_if_lower_dirichlet(5, torch::isclose(b, torch::zeros_like(b))); // z=0
+            exclude_if_lower_dirichlet(6, torch::isclose(b, torch::ones_like(b)));  // z=1
+            break;
+
+        // side 3,4: local coordinates are (x,z)
+        case 3:
+        case 4:
+            exclude_if_lower_dirichlet(1, torch::isclose(a, torch::zeros_like(a))); // x=0
+            exclude_if_lower_dirichlet(2, torch::isclose(a, torch::ones_like(a)));  // x=1
+            exclude_if_lower_dirichlet(5, torch::isclose(b, torch::zeros_like(b))); // z=0
+            exclude_if_lower_dirichlet(6, torch::isclose(b, torch::ones_like(b)));  // z=1
+            break;
+
+        // side 5,6: local coordinates are (x,y)
+        case 5:
+        case 6:
+            exclude_if_lower_dirichlet(1, torch::isclose(a, torch::zeros_like(a))); // x=0
+            exclude_if_lower_dirichlet(2, torch::isclose(a, torch::ones_like(a)));  // x=1
+            exclude_if_lower_dirichlet(3, torch::isclose(b, torch::zeros_like(b))); // y=0
+            exclude_if_lower_dirichlet(4, torch::isclose(b, torch::ones_like(b)));  // y=1
+            break;
+    }
+
+    return keepMask;
+}
   
 public:
     /// @brief Constructor
     template <typename... Args>
     linear_elasticity(double lambda, double mu, bool SUPERVISED_LEARNING, int MAX_EPOCH, 
-                    double MIN_LOSS, std::array<double, 3> BODY_FORCE,, std::vector<int> TFBC_SIDES,
-                    std::vector<std::tuple<int, double, double, double> FORCE_SIDES,
+                    double MIN_LOSS, std::array<double, 3> BODY_FORCE, std::vector<int> TFBC_SIDES,
+                    std::vector<std::tuple<int, double, double, double>> FORCE_SIDES,
                     std::vector<std::tuple<int, double, double, double>> DIRI_SIDES, 
                     int64_t NR_CTRL_PTS, std::string JSON_PATH, std::vector<int64_t> &&layers, 
                     std::vector<std::vector<std::any>> &&activations, Args &&...args)
@@ -355,7 +440,7 @@ public:
             interiorCollPts_ = Base::template collPts<0>(iganet::collPts::greville_interior);
 
 
-            // WARNING, only works for equal number of control points in x and y direction
+            // WARNING, only works for equal number of control points in x, y, and z direction
             nrCollPts_ = static_cast<int>(std::cbrt(std::get<0>(collPts_)[0].size(0)));
             torch::Tensor collPtsCoeffs = std::get<0>(collPts_)[0].slice(0, 0, nrCollPts_);
             nlohmann::json collPtsCoeffs_j = nlohmann::json::array();
@@ -422,344 +507,344 @@ public:
         std::optional<torch::Tensor> tractionFreeValues;
         std::optional<torch::Tensor> tractionZeros;
 
-        // TRACTION BOUNDARY CONDITIONS
-    
-        // only calculate the traction-free boundary conditions if there are any
+
+//-------- TRACTION / NEUMANN BOUNDARY CONDITIONS FOR 3D CUBE ----------------------------------------------
         if (!TFBC_SIDES_.empty() || !FORCE_SIDES_.empty())
-        {   
-            
-            // intersecCtr is used to determine an intersection of dirichlet/force and trac.free sides
-            //static std::vector<int> intersecCtr(0); -> not valid in 3D?
-            // allocate tensors for the traction-free boundary conditions
-            static std::array<torch::Tensor, 3ul> tractionCollPts;
+        {
             // collect sides of traction-free and force BCs
             std::vector<int> neumannSides;
-
-            // collect sides of Dirichlet or force BCs
-            std::vector<int> diriOrForceSides;
-            for (const auto& tuple : DIRI_SIDES_) {
-                // extract only the int-values from DIRI_SIDES_
-                diriOrForceSides.push_back(std::get<0>(tuple));
-            }       
-            
-            // add the two vectors of force- and traction-free-BCs
             neumannSides.reserve(TFBC_SIDES_.size() + FORCE_SIDES_.size());
             neumannSides.insert(neumannSides.end(), TFBC_SIDES_.begin(), TFBC_SIDES_.end());
-            // add the force sides to the neumannSides and diriOrForceSides
             for (const auto& force : FORCE_SIDES_) {
-                // add the force sides to the neumannSides
                 neumannSides.push_back(std::get<0>(force));
-                // add the force sides to the diriOrForceSides
-                diriOrForceSides.push_back(std::get<0>(force));
             }
 
-            // calculate the tractionCollocationPoints once in the beginning of the simulation
-            //if (epoch == 0 && intersecCtr.empty()) {
-            if (epoch == 0 && !tractionCollPts[0].defined()) {
-                // allocate tensors for the traction-free boundary conditions
+            // collect all BC sides once
+            std::vector<int> allBcSides;
+            for (const auto& d : DIRI_SIDES_)  allBcSides.push_back(std::get<0>(d));
+            for (const auto& f : FORCE_SIDES_) allBcSides.push_back(std::get<0>(f));
+            for (int s : TFBC_SIDES_)          allBcSides.push_back(s);
+
+            std::sort(allBcSides.begin(), allBcSides.end());
+            allBcSides.erase(std::unique(allBcSides.begin(), allBcSides.end()), allBcSides.end());
+
+            auto is_diri_side = [&](int side) -> bool {
+                return std::any_of(DIRI_SIDES_.begin(), DIRI_SIDES_.end(),
+                    [&](const auto& t) { return std::get<0>(t) == side; });
+            };
+
+            auto is_force_side = [&](int side) -> bool {
+                return std::any_of(FORCE_SIDES_.begin(), FORCE_SIDES_.end(),
+                    [&](const auto& t) { return std::get<0>(t) == side; });
+            };
+
+            auto is_tf_side = [&](int side) -> bool {
+                return std::find(TFBC_SIDES_.begin(), TFBC_SIDES_.end(), side) != TFBC_SIDES_.end();
+            };
+
+            // priority: Dirichlet > Force > TractionFree
+            auto bc_priority = [&](int side) -> int {
+                if (is_diri_side(side))  return 3;
+                if (is_force_side(side)) return 2;
+                if (is_tf_side(side))    return 1;
+                return 0;
+            };
+
+            // static storage of all traction collocation points
+            static std::array<torch::Tensor, 3ul> tractionCollPts;
+            static std::vector<int> nPtsPerSide;
+
+            if (epoch == 0 && !tractionCollPts[0].defined())
+            {
                 std::vector<torch::Tensor> tractionCollPtsX;
                 std::vector<torch::Tensor> tractionCollPtsY;
                 std::vector<torch::Tensor> tractionCollPtsZ;
+                nPtsPerSide.clear();
 
-                 // 1D collocation coordinates used to build surface grids
-                at::Tensor collPts1D_tensor = std::get<0>(collPts_.second)[0];
-                auto grids = torch::meshgrid({collPts1D_tensor, collPts1D_tensor}, "ij"); 
-                at::Tensor gridA = std::get<0>(grids).reshape({-1}); 
-                at::Tensor gridB = std::get<1>(grids).reshape({-1}); 
-
-                // evaluate the boundary points depending on traction-free sides
-                for (int side : neumannSides) { // 3D: six faces of a unit cube
-                    if (side == 1) {
-                        // check if diriOrForceSides has only side 3 as side
-                        if (std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 3) 
-                            != diriOrForceSides.end() &&
-                            std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 4) 
-                            == diriOrForceSides.end()) {     
-
-                            at::Tensor collPtsY_tensor = std::get<0>(collPts_.second)[0];
-                            tractionCollPtsX.push_back(torch::zeros({nrCollPts_ - 1}));
-                            tractionCollPtsY.push_back(collPtsY_tensor.slice(0, 1));
-                            // 1 collPt has to be removed
-                            intersecCtr.push_back(1);
-                        }
-                        // check if diriOrForceSides has only side 4 as side
-                        else if (std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 3) 
-                                == diriOrForceSides.end() &&
-                                std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 4) 
-                                != diriOrForceSides.end()) {
-            
-                            at::Tensor collPtsY_tensor = std::get<0>(collPts_.second)[0];
-                            tractionCollPtsX.push_back(torch::zeros({nrCollPts_ - 1}));
-                            tractionCollPtsY.push_back(collPtsY_tensor.slice(0, 0, -1));
-                            // 1 collPt has to be removed
-                            intersecCtr.push_back(1);
-                        }
-                        // check if diriOrForceSides has side 3 and side 4
-                        else if (std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 3) 
-                                != diriOrForceSides.end() &&
-                                std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 4) 
-                                != diriOrForceSides.end()) {
-                            
-                            at::Tensor collPtsY_tensor = std::get<0>(collPts_.second)[0];
-                            tractionCollPtsX.push_back(torch::zeros({nrCollPts_ - 2}));  
-                            tractionCollPtsY.push_back(collPtsY_tensor.slice(0, 1, -1));
-                            // 2 collPts have to be removed
-                            intersecCtr.push_back(2);
-                        }
-                        else {
-                            tractionCollPtsX.push_back(torch::zeros(nrCollPts_));
-                            tractionCollPtsY.push_back(std::get<0>(collPts_.second)[0]);
-                            // no collPt has to be removed
-                            intersecCtr.push_back(0);
-                        }
+                auto make_face_points = [&](int side) -> std::array<torch::Tensor, 3ul>
+{
+                switch (side) {
+                    case 1: { // x = 0, local coords = (y,z)
+                        at::Tensor Y = std::get<0>(collPts_.second)[0];
+                        at::Tensor Z = std::get<0>(collPts_.second)[1];
+                        return {torch::zeros_like(Y), Y, Z};
                     }
-                    else if (side == 2) {
-                        // check if diriOrForceSides has only side 3 as side
-                        if (std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 3) 
-                            != diriOrForceSides.end() &&
-                            std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 4) 
-                            == diriOrForceSides.end()) {    
-
-                            at::Tensor collPtsY_tensor = std::get<0>(collPts_.second)[0];
-                            tractionCollPtsX.push_back(torch::ones({nrCollPts_ - 1}));
-                            tractionCollPtsY.push_back(collPtsY_tensor.slice(0, 1));
-                            // 1 collPt has to be removed
-                            intersecCtr.push_back(1);
-                        }
-                        // check if diriOrForceSides has only side 4 as side
-                        else if (std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 3) 
-                                == diriOrForceSides.end() &&
-                                std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 4) 
-                                != diriOrForceSides.end()) {
-
-                            at::Tensor collPtsY_tensor = std::get<0>(collPts_.second)[0];
-                            tractionCollPtsX.push_back(torch::ones({nrCollPts_ - 1}));
-                            tractionCollPtsY.push_back(collPtsY_tensor.slice(0, 0, -1));
-                            // 1 collPt has to be removed
-                            intersecCtr.push_back(1);
-                        }
-                        // check if diriOrForceSides has side 3 and side 4
-                        else if (std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 3) 
-                                != diriOrForceSides.end() &&
-                                std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 4) 
-                                != diriOrForceSides.end()) {
-
-                            at::Tensor collPtsY_tensor = std::get<0>(collPts_.second)[0];
-                            tractionCollPtsX.push_back(torch::ones({nrCollPts_ - 2}));
-                            tractionCollPtsY.push_back(collPtsY_tensor.slice(0, 1, -1));
-                            // 2 collPts have to be removed
-                            intersecCtr.push_back(2);
-                        }
-                        else {
-                            tractionCollPtsX.push_back(torch::ones(nrCollPts_));
-                            tractionCollPtsY.push_back(std::get<0>(collPts_.second)[0]);
-                            // no collPt has to be removed
-                            intersecCtr.push_back(0);
-                        }
-                        
+                    case 2: { // x = 1, local coords = (y,z)
+                        at::Tensor Y = std::get<1>(collPts_.second)[0];
+                        at::Tensor Z = std::get<1>(collPts_.second)[1];
+                        return {torch::ones_like(Y), Y, Z};
                     }
-                    else if (side == 3) {
-                        // check if diriOrForceSides has only side 1 as side
-                        if (std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 1) 
-                            != diriOrForceSides.end() &&
-                            std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 2) 
-                            == diriOrForceSides.end()) {   
-
-                            at::Tensor collPtsX_tensor = std::get<0>(collPts_.second)[0];
-                            tractionCollPtsX.push_back(collPtsX_tensor.slice(0, 1));
-                            tractionCollPtsY.push_back(torch::zeros({nrCollPts_ - 1}));
-                            // 1 collPt has to be removed
-                            intersecCtr.push_back(1);
-                        }
-                        // check if diriOrForceSides has only side 2 as side
-                        else if (std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 1) 
-                                == diriOrForceSides.end() &&
-                                std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 2) 
-                                != diriOrForceSides.end()) {   
-
-                            at::Tensor collPtsX_tensor = std::get<0>(collPts_.second)[0];
-                            tractionCollPtsX.push_back(collPtsX_tensor.slice(0, 0, -1));
-                            tractionCollPtsY.push_back(torch::zeros({nrCollPts_ - 1}));
-                            // 1 collPt has to be removed
-                            intersecCtr.push_back(1);
-                        }
-                        // check if diriOrForceSides has side 1 and side 2
-                        else if (std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 1) 
-                                != diriOrForceSides.end() &&
-                                std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 2) 
-                                != diriOrForceSides.end()) {   
-
-                            at::Tensor collPtsX_tensor = std::get<0>(collPts_.second)[0];
-                            tractionCollPtsX.push_back(collPtsX_tensor.slice(0, 1, -1));
-                            tractionCollPtsY.push_back(torch::zeros({nrCollPts_ - 2}));
-                            // 2 collPts have to be removed
-                            intersecCtr.push_back(2);
-                        }
-                        else {
-                            tractionCollPtsX.push_back(std::get<0>(collPts_.second)[0]);
-                            tractionCollPtsY.push_back(torch::zeros(nrCollPts_));
-                            // no collPt has to be removed
-                            intersecCtr.push_back(0);
-                        }
+                    case 3: { // y = 0, local coords = (x,z)
+                        at::Tensor X = std::get<2>(collPts_.second)[0];
+                        at::Tensor Z = std::get<2>(collPts_.second)[1];
+                        return {X, torch::zeros_like(X), Z};
                     }
-                    else if (side == 4) {
-                        // check if diriOrForceSides has only side 1 as side
-                        if (std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 1) 
-                            != diriOrForceSides.end() &&
-                            std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 2) 
-                            == diriOrForceSides.end()) {   
-
-                            at::Tensor collPtsX_tensor = std::get<0>(collPts_.second)[0];
-                            tractionCollPtsX.push_back(collPtsX_tensor.slice(0, 1));
-                            tractionCollPtsY.push_back(torch::ones({nrCollPts_ - 1}));
-                            // 1 collPt has to be removed
-                            intersecCtr.push_back(1);
-                        }
-                        // check if diriOrForceSides has only side 2 as side
-                        else if (std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 1) 
-                                == diriOrForceSides.end() &&
-                                std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 2) 
-                                != diriOrForceSides.end()) {   
-
-                            at::Tensor collPtsX_tensor = std::get<0>(collPts_.second)[0];
-                            tractionCollPtsX.push_back(collPtsX_tensor.slice(0, 0, -1));
-                            tractionCollPtsY.push_back(torch::ones({nrCollPts_ - 1}));
-                            // 1 collPt has to be removed
-                            intersecCtr.push_back(1);
-                        }
-                        // check if diriOrForceSides has side 1 and side 2
-                        else if (std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 1) 
-                                != diriOrForceSides.end() &&
-                                std::find(diriOrForceSides.begin(), diriOrForceSides.end(), 2) 
-                                != diriOrForceSides.end()) {   
-
-                            at::Tensor collPtsX_tensor = std::get<0>(collPts_.second)[0];
-                            tractionCollPtsX.push_back(collPtsX_tensor.slice(0, 1, -1));
-                            tractionCollPtsY.push_back(torch::ones({nrCollPts_ - 2}));
-                            // 2 collPts have to be removed
-                            intersecCtr.push_back(2);
-                        }
-                        else {
-                            tractionCollPtsX.push_back(std::get<0>(collPts_.second)[0]);
-                            tractionCollPtsY.push_back(torch::ones(nrCollPts_));
-                            // no collPt has to be removed
-                            intersecCtr.push_back(0);
-                        }
+                    case 4: { // y = 1, local coords = (x,z)
+                        at::Tensor X = std::get<3>(collPts_.second)[0];
+                        at::Tensor Z = std::get<3>(collPts_.second)[1];
+                        return {X, torch::ones_like(X), Z};
                     }
-                    
-                    else {
-                        throw std::invalid_argument("Side for traction BC has to be 1, 2, 3 or 4.");
+                    case 5: { // z = 0, local coords = (x,y)
+                        at::Tensor X = std::get<4>(collPts_.second)[0];
+                        at::Tensor Y = std::get<4>(collPts_.second)[1];
+                        return {X, Y, torch::zeros_like(X)};
+                    }
+                    case 6: { // z = 1, local coords = (x,y)
+                        at::Tensor X = std::get<5>(collPts_.second)[0];
+                        at::Tensor Y = std::get<5>(collPts_.second)[1];
+                        return {X, Y, torch::ones_like(X)};
+                    }
+                    default:
+                        throw std::invalid_argument("Side for 3D traction BC has to be 1..6.");
+                }
+            };
+
+                // returns true if side and otherSide intersect along an edge
+                auto should_exclude_by_side = [&](int side, int otherSide) -> bool
+                {
+                    if (side == otherSide) {
+                        return false;
+                    }
+
+                    // opposite faces do not intersect
+                    if ((side == 1 && otherSide == 2) || (side == 2 && otherSide == 1) ||
+                        (side == 3 && otherSide == 4) || (side == 4 && otherSide == 3) ||
+                        (side == 5 && otherSide == 6) || (side == 6 && otherSide == 5)) {
+                        return false;
+                    }
+
+                    return true;
+                };
+
+                // mask points that lie on a specific side
+                auto mask_points_on_side = [&](const at::Tensor& X,
+                                            const at::Tensor& Y,
+                                            const at::Tensor& Z,
+                                            int side) -> at::Tensor
+                {
+                    switch (side) {
+                        case 1: return torch::isclose(X, torch::zeros_like(X));
+                        case 2: return torch::isclose(X, torch::ones_like(X));
+                        case 3: return torch::isclose(Y, torch::zeros_like(Y));
+                        case 4: return torch::isclose(Y, torch::ones_like(Y));
+                        case 5: return torch::isclose(Z, torch::zeros_like(Z));
+                        case 6: return torch::isclose(Z, torch::ones_like(Z));
+                        default:
+                            throw std::invalid_argument("Side for 3D mask has to be 1..6.");
+                    }
+                };
+
+                for (int side : neumannSides)
+                {
+                    auto facePts = make_face_points(side);
+                    at::Tensor X = facePts[0];
+                    at::Tensor Y = facePts[1];
+                    at::Tensor Z = facePts[2];
+
+                    // unique ownership on edges/corners:
+                    // Dirichlet > Force > TractionFree
+                    // within same priority: smaller side number wins
+                    at::Tensor keepMask = torch::ones({X.size(0)}, torch::TensorOptions().dtype(torch::kBool));
+                    const int currentPriority = bc_priority(side);
+
+                    for (int otherSide : allBcSides)
+                    {
+                        if (otherSide == side) {
+                            continue;
+                        }
+
+                        if (!should_exclude_by_side(side, otherSide)) {
+                            continue;
+                        }
+
+                        const int otherPriority = bc_priority(otherSide);
+                        const bool otherWins =
+                            (otherPriority > currentPriority) ||
+                            (otherPriority == currentPriority && otherSide < side);
+
+                        if (!otherWins) {
+                            continue;
+                        }
+
+                        at::Tensor onOtherSide = mask_points_on_side(X, Y, Z, otherSide);
+                        keepMask = torch::logical_and(keepMask, torch::logical_not(onOtherSide));
+                    }
+
+                    at::Tensor idx = torch::nonzero(keepMask).reshape({-1});
+
+                    at::Tensor Xf = X.index_select(0, idx);
+                    at::Tensor Yf = Y.index_select(0, idx);
+                    at::Tensor Zf = Z.index_select(0, idx);
+
+                    nPtsPerSide.push_back(static_cast<int>(Xf.size(0)));
+
+                    if (Xf.size(0) > 0) {
+                        tractionCollPtsX.push_back(Xf);
+                        tractionCollPtsY.push_back(Yf);
+                        tractionCollPtsZ.push_back(Zf);
                     }
                 }
-                
-                // merge the tensors to get a (nrTractionCollPts, 2) tensor
-                if (!tractionCollPtsX.empty() && !tractionCollPtsY.empty()) {
+
+                if (!tractionCollPtsX.empty()) {
                     tractionCollPts = {
-                        torch::cat(tractionCollPtsX, 0), 
-                        torch::cat(tractionCollPtsY, 0)
+                        torch::cat(tractionCollPtsX, 0),
+                        torch::cat(tractionCollPtsY, 0),
+                        torch::cat(tractionCollPtsZ, 0)
                     };
-                } 
+                } else {
+                    tractionCollPts = {
+                        torch::empty({0}, outputs.options()),
+                        torch::empty({0}, outputs.options()),
+                        torch::empty({0}, outputs.options())
+                    };
+                }
+
                 var_knot_indices_boundary_ =
                     Base::template output<0>().template find_knot_indices<iganet::functionspace::interior>(
-                    tractionCollPts);
+                        tractionCollPts);
                 var_coeff_indices_boundary_ =
                     Base::template output<0>().template find_coeff_indices<iganet::functionspace::interior>(
-                    var_knot_indices_boundary_);
+                        var_knot_indices_boundary_);
                 G_knot_indices_boundary_ =
                     this->template input<0>().template find_knot_indices<iganet::functionspace::interior>(
                         tractionCollPts);
                 G_coeff_indices_boundary_ =
-                this->template input<0>().template find_coeff_indices<iganet::functionspace::interior>(
-                    G_knot_indices_boundary_);
-            }  
+                    this->template input<0>().template find_coeff_indices<iganet::functionspace::interior>(
+                        G_knot_indices_boundary_);
+            }
 
-            // calculate the jacobian of the affected boundary points
-            auto jacobianBoundary = this->template output<0>().ijac(this->template input<0>(), tractionCollPts, 
-                var_knot_indices_boundary_, var_coeff_indices_boundary_,
-                G_knot_indices_boundary_, G_coeff_indices_boundary_);
-            auto ux_x = *jacobianBoundary[0];
-            auto ux_y = *jacobianBoundary[1];
-            auto uy_x = *jacobianBoundary[2];
-            auto uy_y = *jacobianBoundary[3];
+            // if there are no remaining traction points after masking, skip safely
+            if (tractionCollPts[0].numel() > 0) {
+                auto jacobianBoundary = this->template output<0>().ijac(
+                    this->template input<0>(),
+                    tractionCollPts,
+                    var_knot_indices_boundary_, var_coeff_indices_boundary_,
+                    G_knot_indices_boundary_, G_coeff_indices_boundary_);
 
-            // allocate tensors for the traction-free boundary conditions (tfbc)
-            torch::Tensor tractionValuesX = torch::zeros({tractionCollPts[0].size(0)});
-            torch::Tensor tractionValuesY = torch::zeros({tractionCollPts[0].size(0)});
-            // calculate the traction values at the boundary points
-            int pointCtr = 0;
-            int sideCtr = 0; 
+                // 3D displacement gradient entries
+                auto ux_x = *jacobianBoundary[0];
+                auto ux_y = *jacobianBoundary[1];
+                auto ux_z = *jacobianBoundary[2];
 
-            for (int side : neumannSides) {
-                int n_vals = nrCollPts_ - intersecCtr[sideCtr];
+                auto uy_x = *jacobianBoundary[3];
+                auto uy_y = *jacobianBoundary[4];
+                auto uy_z = *jacobianBoundary[5];
 
-                for (int i = 0; i < n_vals; ++i) {
-                                int idx = pointCtr + i;
+                auto uz_x = *jacobianBoundary[6];
+                auto uz_y = *jacobianBoundary[7];
+                auto uz_z = *jacobianBoundary[8];
 
-                    if (side == 1) {
-                        tractionValuesX[idx] =  - lambda_ * (ux_x[idx] + uy_y[idx]) 
-                                                - 2 * mu_ * ux_x[idx];
-                        tractionValuesY[idx] =  - mu_ * (uy_x[idx] + ux_y[idx]);
+                torch::Tensor tractionValuesX = torch::zeros({tractionCollPts[0].size(0)}, ux_x.options());
+                torch::Tensor tractionValuesY = torch::zeros({tractionCollPts[0].size(0)}, ux_x.options());
+                torch::Tensor tractionValuesZ = torch::zeros({tractionCollPts[0].size(0)}, ux_x.options());
+
+                int pointCtr = 0;
+                int sideCtr  = 0;
+
+                for (int side : neumannSides)
+                {
+                    int n_vals = nPtsPerSide[sideCtr];
+
+                    for (int i = 0; i < n_vals; ++i)
+                    {
+                        int idx = pointCtr + i;
+
+                        if (side == 1) { // x = 0, n = (-1,0,0)
+                            tractionValuesX[idx] = -((lambda_ + 2.0 * mu_) * ux_x[idx]
+                                                + lambda_ * uy_y[idx]
+                                                + lambda_ * uz_z[idx]);
+                            tractionValuesY[idx] = -(mu_ * (ux_y[idx] + uy_x[idx]));
+                            tractionValuesZ[idx] = -(mu_ * (ux_z[idx] + uz_x[idx]));
+                        }
+                        else if (side == 2) { // x = 1, n = (1,0,0)
+                            tractionValuesX[idx] =  ((lambda_ + 2.0 * mu_) * ux_x[idx]
+                                                + lambda_ * uy_y[idx]
+                                                + lambda_ * uz_z[idx]);
+                            tractionValuesY[idx] =  (mu_ * (ux_y[idx] + uy_x[idx]));
+                            tractionValuesZ[idx] =  (mu_ * (ux_z[idx] + uz_x[idx]));
+                        }
+                        else if (side == 3) { // y = 0, n = (0,-1,0)
+                            tractionValuesX[idx] = -(mu_ * (ux_y[idx] + uy_x[idx]));
+                            tractionValuesY[idx] = -(lambda_ * ux_x[idx]
+                                                + (lambda_ + 2.0 * mu_) * uy_y[idx]
+                                                + lambda_ * uz_z[idx]);
+                            tractionValuesZ[idx] = -(mu_ * (uy_z[idx] + uz_y[idx]));
+                        }
+                        else if (side == 4) { // y = 1, n = (0,1,0)
+                            tractionValuesX[idx] =  (mu_ * (ux_y[idx] + uy_x[idx]));
+                            tractionValuesY[idx] =  (lambda_ * ux_x[idx]
+                                                + (lambda_ + 2.0 * mu_) * uy_y[idx]
+                                                + lambda_ * uz_z[idx]);
+                            tractionValuesZ[idx] =  (mu_ * (uy_z[idx] + uz_y[idx]));
+                        }
+                        else if (side == 5) { // z = 0, n = (0,0,-1)
+                            tractionValuesX[idx] = -(mu_ * (ux_z[idx] + uz_x[idx]));
+                            tractionValuesY[idx] = -(mu_ * (uy_z[idx] + uz_y[idx]));
+                            tractionValuesZ[idx] = -(lambda_ * ux_x[idx]
+                                                + lambda_ * uy_y[idx]
+                                                + (lambda_ + 2.0 * mu_) * uz_z[idx]);
+                        }
+                        else if (side == 6) { // z = 1, n = (0,0,1)
+                            tractionValuesX[idx] =  (mu_ * (ux_z[idx] + uz_x[idx]));
+                            tractionValuesY[idx] =  (mu_ * (uy_z[idx] + uz_y[idx]));
+                            tractionValuesZ[idx] =  (lambda_ * ux_x[idx]
+                                                + lambda_ * uy_y[idx]
+                                                + (lambda_ + 2.0 * mu_) * uz_z[idx]);
+                        }
+                        else {
+                            throw std::invalid_argument("Side for 3D traction BC has to be 1..6.");
+                        }
                     }
-                    else if (side == 2) {
-                        tractionValuesX[idx] = lambda_ * (ux_x[idx] + uy_y[idx]) 
-                                            + 2 * mu_ * ux_x[idx];
-                        tractionValuesY[idx] = mu_ * (uy_x[idx] + ux_y[idx]);
-                    }
-                    else if (side == 3) {
-                        tractionValuesX[idx] =  - mu_ * (uy_x[idx] + ux_y[idx]);
-                        tractionValuesY[idx] =  - lambda_ * (ux_x[idx] + uy_y[idx]) 
-                                                - 2 * mu_ * uy_y[idx];
-                    }
-                    else if (side == 4) {
-                        tractionValuesX[idx] = mu_ * (uy_x[idx] + ux_y[idx]);
-                        tractionValuesY[idx] = lambda_ * (ux_x[idx] + uy_y[idx]) 
-                                            + 2 * mu_ * uy_y[idx];
-                    }
+
+                    pointCtr += n_vals;
+                    sideCtr++;
                 }
 
-                pointCtr += n_vals;
-                sideCtr++;
-            }
+                torch::Tensor tractionValues =
+                    torch::stack({tractionValuesX, tractionValuesY, tractionValuesZ}, 1);
 
-            // merge the traction tensors of x- and y-directions
-            torch::Tensor tractionValues = torch::stack({tractionValuesX, tractionValuesY}, 1);
+                if (!FORCE_SIDES_.empty())
+                {
+                    int cutlength = 0;
+                    int forceSize = static_cast<int>(FORCE_SIDES_.size());
 
-            if (!FORCE_SIDES_.empty()) {
-                // calculate total cutlength from last forceSize entries of intersecCtr
-                int cutlength = 0;
-                int forceSize = FORCE_SIDES_.size();
-                for (int i = static_cast<int>(intersecCtr.size()) - forceSize; 
-                        i < static_cast<int>(intersecCtr.size()); ++i) {
-                    cutlength += nrCollPts_ - intersecCtr[i];
+                    for (int i = static_cast<int>(nPtsPerSide.size()) - forceSize;
+                        i < static_cast<int>(nPtsPerSide.size()); ++i) {
+                        cutlength += nPtsPerSide[i];
+                    }
+
+                    tractionFreeValues.emplace(
+                        tractionValues.slice(0, 0, tractionValues.size(0) - cutlength));
+                    tractionZeros.emplace(torch::zeros_like(*tractionFreeValues));
+
+                    forceValues.emplace(
+                        tractionValues.slice(0, tractionValues.size(0) - cutlength, tractionValues.size(0)));
+                    targetForce.emplace(torch::zeros_like(*forceValues));
+
+                    int offset = 0;
+                    int startIdx = static_cast<int>(nPtsPerSide.size()) - forceSize;
+
+                    for (size_t i = 0; i < FORCE_SIDES_.size(); ++i)
+                    {
+                        int reducedPts = nPtsPerSide[startIdx + static_cast<int>(i)];
+                        auto rowSlice = (*targetForce).slice(0, offset, offset + reducedPts);
+
+                        rowSlice.slice(1, 0, 1).fill_(std::get<1>(FORCE_SIDES_[i])); // x-force
+                        rowSlice.slice(1, 1, 2).fill_(std::get<2>(FORCE_SIDES_[i])); // y-force
+                        rowSlice.slice(1, 2, 3).fill_(std::get<3>(FORCE_SIDES_[i])); // z-force
+
+                        offset += reducedPts;
+                    }
                 }
-                // separate traction-free and force parts
-                tractionFreeValues.emplace
-                    (tractionValues.slice(0, 0, tractionValues.size(0) - cutlength));
-                tractionZeros.emplace(torch::zeros_like(*tractionFreeValues));
-                forceValues.emplace(tractionValues.slice(0, tractionValues.size(0) -
-                                    cutlength, tractionValues.size(0)));
-                targetForce.emplace(torch::zeros_like(*forceValues));
-                // fill in the known force values
-                int offset = 0;
-                int startIdx = static_cast<int>(intersecCtr.size()) - forceSize;
-                for (size_t i = 0; i < FORCE_SIDES_.size(); ++i) {
-                    int reducedPts = nrCollPts_ - intersecCtr[startIdx + i];
-                    auto rowSlice = (*targetForce).slice(0, offset, offset + reducedPts);
-                    rowSlice.slice(1, 0, 1).fill_(std::get<1>(FORCE_SIDES_[i]));  // x-value
-                    rowSlice.slice(1, 1, 2).fill_(std::get<2>(FORCE_SIDES_[i]));  // y-value
-                    offset += reducedPts;
-                }       
+                else
+                {
+                    tractionFreeValues.emplace(tractionValues);
+                    tractionZeros.emplace(torch::zeros_like(*tractionFreeValues));
+                }
             }
-            else {
-                // set the traction-free values
-                tractionFreeValues.emplace(tractionValues);
-                // set the target values to zero
-                tractionZeros.emplace(torch::zeros_like(*tractionFreeValues));
-            }
-
         }
 
-        // LINEAR ELASTICITY EQUATION
+//----------- LINEAR ELASTICITY EQUATION------------------------------------------------------------------------
 
         // calculation of the second derivatives of the displacements (u)
         auto hessianColl = this->template output<0>().ihess(this->template input<0>(), interiorCollPts_.first, 
@@ -770,9 +855,9 @@ public:
         auto& ux_xx = hessianColl(0,0,0);
         auto& ux_xy = hessianColl(0,1,0);
         auto& ux_xz = hessianColl(0,2,0);
-        auto& ux_yx = hessianColl(1,0,0);
-        auto& ux_yy = hessianColl(1,1,0);
-        auto& ux_yz = hessianColl(1,2,0);
+        auto& ux_yx = hessianColl(0,0,1);
+        auto& ux_yy = hessianColl(0,1,1);
+        auto& ux_yz = hessianColl(0,2,1);
         auto& ux_zx = hessianColl(0,0,2);
         auto& ux_zy = hessianColl(0,1,2);
         auto& ux_zz = hessianColl(0,2,2);
@@ -832,10 +917,10 @@ public:
         torch::Tensor divStress = torch::stack({divStressX, divStressY, divStressZ}, /*dim=*/1);
 
         // BODY FORCE: constant vector (fx, fy)
-        auto opts = divStress.options();  // device + dtype passend zu divStress
+        //auto opts = divStress.options();  // device + dtype passend zu divStress -> bereits davor definiert
 
         torch::Tensor bodyForce = torch::tensor(
-            {BODY_FORCE_.first, BODY_FORCE_.second,BODY_FORCE_.third},
+            {BODY_FORCE_[0], BODY_FORCE_[1], BODY_FORCE_[2]},
             opts
         ).view({1, 3}).repeat({divStress.size(0), 1});   // (N,3)
 
@@ -847,7 +932,7 @@ public:
 
             // calculation of the loss function for double-sided constraint solid
             // div(sigma) + f = 0 --> div(sigma) = -f
-            elastLoss = torch::mse_loss(divStress, bodyForce);
+            elastLoss = torch::mse_loss(divStress, -bodyForce);
             
             // add the elasticity loss to the total loss
             totalLoss = elastLoss;
@@ -881,53 +966,62 @@ public:
                 // evaluation of the displacements at the reference boundary points
                 auto bdr = ref_.template eval<iganet::functionspace::boundary>(collPts_.second);
 
+                auto masked_side_loss = [&](const torch::Tensor& u0,
+                            const torch::Tensor& u1,
+                            const torch::Tensor& u2,
+                            const torch::Tensor& b0,
+                            const torch::Tensor& b1,
+                            const torch::Tensor& b2,
+                            int sideNr) -> torch::Tensor
+            {
+                torch::Tensor keepMask = buildDirichletKeepMask(sideNr);
+                torch::Tensor keepIdx = torch::nonzero(keepMask).reshape({-1});
+
+                if (keepIdx.numel() == 0) {
+                    return torch::zeros({}, outputs.options());
+                }
+
+                return torch::mse_loss(u0.index_select(0, keepIdx), b0.index_select(0, keepIdx)) +
+                    torch::mse_loss(u1.index_select(0, keepIdx), b1.index_select(0, keepIdx)) +
+                    torch::mse_loss(u2.index_select(0, keepIdx), b2.index_select(0, keepIdx));
+            };
+
+            auto add_masked_side_loss = [&](const auto& u_side, const auto& b_side, int sideNr) {
+                *bcLoss += bcWeight * masked_side_loss(
+                    *u_side[0], *u_side[1], *u_side[2],
+                    *b_side[0], *b_side[1], *b_side[2],
+                    sideNr
+                );
+            };
+
                 // loop through all dirichlet sides
                 for (const auto& side : DIRI_SIDES_) {
                     int sideNr = std::get<0>(side);
-                    
+
                     switch (sideNr) {
-                        case 1: 
-                            *bcLoss += bcWeight * 
-                                (torch::mse_loss(*std::get<0>(u_bdr)[0], *std::get<0>(bdr)[0]) + 
-                                torch::mse_loss(*std::get<0>(u_bdr)[1], *std::get<0>(bdr)[1])+
-                                torch::mse_loss(*std::get<0>(u_bdr)[2], *std::get<0>(bdr)[2]));
+                        case 1:
+                            add_masked_side_loss(std::get<0>(u_bdr), std::get<0>(bdr), 1);
                             break;
                         case 2:
-                            *bcLoss += bcWeight * 
-                                (torch::mse_loss(*std::get<1>(u_bdr)[0], *std::get<1>(bdr)[0]) + 
-                                torch::mse_loss(*std::get<1>(u_bdr)[1], *std::get<1>(bdr)[1]) +
-                                torch::mse_loss(*std::get<1>(u_bdr)[2], *std::get<1>(bdr)[2]));
+                            add_masked_side_loss(std::get<1>(u_bdr), std::get<1>(bdr), 2);
                             break;
                         case 3:
-                            *bcLoss += bcWeight * 
-                                (torch::mse_loss(*std::get<2>(u_bdr)[0], *std::get<2>(bdr)[0]) + 
-                                torch::mse_loss(*std::get<2>(u_bdr)[1], *std::get<2>(bdr)[1])+
-                                torch::mse_loss(*std::get<2>(u_bdr)[2], *std::get<2>(bdr)[2]));
+                            add_masked_side_loss(std::get<2>(u_bdr), std::get<2>(bdr), 3);
                             break;
                         case 4:
-                            *bcLoss += bcWeight * 
-                                (torch::mse_loss(*std::get<3>(u_bdr)[0], *std::get<3>(bdr)[0]) + 
-                                torch::mse_loss(*std::get<3>(u_bdr)[1], *std::get<3>(bdr)[1]) +
-                                torch::mse_loss(*std::get<3>(u_bdr)[2], *std::get<3>(bdr)[2]));
+                            add_masked_side_loss(std::get<3>(u_bdr), std::get<3>(bdr), 4);
                             break;
                         case 5:
-                            *bcLoss += bcWeight *
-                                ( torch::mse_loss(*std::get<4>(u_bdr)[0], *std::get<4>(bdr)[0])
-                                + torch::mse_loss(*std::get<4>(u_bdr)[1], *std::get<4>(bdr)[1])
-                                + torch::mse_loss(*std::get<4>(u_bdr)[2], *std::get<4>(bdr)[2]) );
+                            add_masked_side_loss(std::get<4>(u_bdr), std::get<4>(bdr), 5);
                             break;
-
                         case 6:
-                            *bcLoss += bcWeight *
-                                ( torch::mse_loss(*std::get<5>(u_bdr)[0], *std::get<5>(bdr)[0])
-                                + torch::mse_loss(*std::get<5>(u_bdr)[1], *std::get<5>(bdr)[1])
-                                + torch::mse_loss(*std::get<5>(u_bdr)[2], *std::get<5>(bdr)[2]) );
-                            break;    
-
+                            add_masked_side_loss(std::get<5>(u_bdr), std::get<5>(bdr), 6);
+                            break;
                         default:
                             std::cerr << "Error: Invalid side number for Dirichlet BC!" << std::endl;
                     }
                 }
+               
                 totalLoss += *bcLoss;
                 singleLossOutput << " + BL " << std::setw(11) << (*bcLoss).item<double>() / bcWeight 
                                 << " * 1e" << static_cast<int>(std::log10(bcWeight));
@@ -964,7 +1058,7 @@ public:
 
             // calculation of the loss function for double-sided constraint solid
             // div(sigma) + f = 0 --> div(sigma) = -f
-            elastLoss = torch::mse_loss(divStress, bodyForce);
+            elastLoss = torch::mse_loss(divStress, -bodyForce);
 
             // add the elasticity loss and supervised loss to the total loss
             totalLoss = *gsLoss + elastLoss;
@@ -998,6 +1092,33 @@ public:
                 auto u_bdr = this->template output<0>().template eval<iganet::functionspace::boundary>(collPts_.second);
                 // evaluation of the displacements at the reference boundary points
                 auto bdr = ref_.template eval<iganet::functionspace::boundary>(collPts_.second);
+                auto masked_side_loss = [&](const torch::Tensor& u0,
+                            const torch::Tensor& u1,
+                            const torch::Tensor& u2,
+                            const torch::Tensor& b0,
+                            const torch::Tensor& b1,
+                            const torch::Tensor& b2,
+                            int sideNr) -> torch::Tensor
+            {
+                torch::Tensor keepMask = buildDirichletKeepMask(sideNr);
+                torch::Tensor keepIdx = torch::nonzero(keepMask).reshape({-1});
+
+                if (keepIdx.numel() == 0) {
+                    return torch::zeros({}, outputs.options());
+                }
+
+                return torch::mse_loss(u0.index_select(0, keepIdx), b0.index_select(0, keepIdx)) +
+                    torch::mse_loss(u1.index_select(0, keepIdx), b1.index_select(0, keepIdx)) +
+                    torch::mse_loss(u2.index_select(0, keepIdx), b2.index_select(0, keepIdx));
+            };
+
+            auto add_masked_side_loss = [&](const auto& u_side, const auto& b_side, int sideNr) {
+                *bcLoss += bcWeight * masked_side_loss(
+                    *u_side[0], *u_side[1], *u_side[2],
+                    *b_side[0], *b_side[1], *b_side[2],
+                    sideNr
+                );
+            };
 
                 // loop through all dirichlet sides
                 for (const auto& side : DIRI_SIDES_) {
@@ -1005,42 +1126,23 @@ public:
 
                     switch (sideNr) {
                         case 1:
-                            *bcLoss += bcWeight * 
-                                (torch::mse_loss(*std::get<0>(u_bdr)[0], *std::get<0>(bdr)[0]) + 
-                                torch::mse_loss(*std::get<0>(u_bdr)[1], *std::get<0>(bdr)[1]) +
-                                torch::mse_loss(*std::get<0>(u_bdr)[2], *std::get<0>(bdr)[2]));
+                            add_masked_side_loss(std::get<0>(u_bdr), std::get<0>(bdr), 1);
                             break;
                         case 2:
-                            *bcLoss += bcWeight * 
-                                (torch::mse_loss(*std::get<1>(u_bdr)[0], *std::get<1>(bdr)[0]) + 
-                                torch::mse_loss(*std::get<1>(u_bdr)[1], *std::get<1>(bdr)[1])+
-                                torch::mse_loss(*std::get<1>(u_bdr)[2], *std::get<1>(bdr)[2]));
+                            add_masked_side_loss(std::get<1>(u_bdr), std::get<1>(bdr), 2);
                             break;
                         case 3:
-                            *bcLoss += bcWeight * 
-                                (torch::mse_loss(*std::get<2>(u_bdr)[0], *std::get<2>(bdr)[0]) + 
-                                torch::mse_loss(*std::get<2>(u_bdr)[1], *std::get<2>(bdr)[1])+
-                                torch::mse_loss(*std::get<2>(u_bdr)[2], *std::get<2>(bdr)[2]));
+                            add_masked_side_loss(std::get<2>(u_bdr), std::get<2>(bdr), 3);
                             break;
                         case 4:
-                            *bcLoss += bcWeight * 
-                                (torch::mse_loss(*std::get<3>(u_bdr)[0], *std::get<3>(bdr)[0]) + 
-                                torch::mse_loss(*std::get<3>(u_bdr)[1], *std::get<3>(bdr)[1])+
-                                torch::mse_loss(*std::get<3>(u_bdr)[2], *std::get<3>(bdr)[2]));
+                            add_masked_side_loss(std::get<3>(u_bdr), std::get<3>(bdr), 4);
                             break;
                         case 5:
-                            *bcLoss += bcWeight *
-                                ( torch::mse_loss(*std::get<4>(u_bdr)[0], *std::get<4>(bdr)[0])
-                                + torch::mse_loss(*std::get<4>(u_bdr)[1], *std::get<4>(bdr)[1])
-                                + torch::mse_loss(*std::get<4>(u_bdr)[2], *std::get<4>(bdr)[2]));
+                            add_masked_side_loss(std::get<4>(u_bdr), std::get<4>(bdr), 5);
                             break;
                         case 6:
-                            *bcLoss += bcWeight *
-                                ( torch::mse_loss(*std::get<5>(u_bdr)[0], *std::get<5>(bdr)[0])
-                                + torch::mse_loss(*std::get<5>(u_bdr)[1], *std::get<5>(bdr)[1])
-                                + torch::mse_loss(*std::get<5>(u_bdr)[2], *std::get<5>(bdr)[2]));
+                            add_masked_side_loss(std::get<5>(u_bdr), std::get<5>(bdr), 6);
                             break;
-
                         default:
                             std::cerr << "Error: Invalid side number for Dirichlet BC!" << std::endl;
                     }
@@ -1112,40 +1214,50 @@ public:
                 sigma_zz[i] = lambda_ * (ux_x[i] + uy_y[i] + uz_z[i]) + 2 * mu_ * uz_z[i]; //-> normal stress in z-direction
 
                 // calculate von mises stress at the collocation points
-                sigma_vm[i] = sqrt(sigma_xx[i] * sigma_xx[i] + sigma_yy[i] * sigma_yy[i] 
-                                - sigma_xx[i] * sigma_yy[i] + sigma_xy[i] * sigma_xy[i] * 3);
+                sigma_vm[i] = sqrt(0.5 * (
+                (sigma_xx[i] - sigma_yy[i]) * (sigma_xx[i] - sigma_yy[i]) +
+                (sigma_yy[i] - sigma_zz[i]) * (sigma_yy[i] - sigma_zz[i]) +
+                (sigma_zz[i] - sigma_xx[i]) * (sigma_zz[i] - sigma_xx[i]) +
+                6.0 * (sigma_xy[i]*sigma_xy[i] + sigma_yz[i]*sigma_yz[i] + sigma_xz[i]*sigma_xz[i])
+            ));
                 
                 // calculate the strains at the collocation points
-                epsilon_xx[i] = (lambda_ + mu_) / (mu_ * (3 * lambda_ + 2 * mu_)) * 
+                epsilon_xx[i] = ux_x[i];
+                epsilon_yy[i] = uy_y[i];
+                epsilon_zz[i] = uz_z[i];
+                
+                /*epsilon_xx[i] = (lambda_ + mu_) / (mu_ * (3 * lambda_ + 2 * mu_)) * 
                     (sigma_xx[i] - lambda_ / (2 * (lambda_ + mu_)) * sigma_yy[i]);
                 epsilon_yy[i] = (lambda_ + mu_) / (mu_ * (3 * lambda_ + 2 * mu_)) * 
                     (sigma_yy[i] - lambda_ / (2 * (lambda_ + mu_)) * sigma_xx[i]);
-
+                */
                 // only valid for load in x-direction
-                poisson_re[i] = - epsilon_yy[i] / epsilon_xx[i];
+                // poisson_re[i] = - epsilon_yy[i] / epsilon_xx[i];
                 
                 // add the stresses to the json objects
                 netVmStresses_j.push_back({sigma_vm[i].item<double>()});
                 netXStresses_j.push_back({sigma_xx[i].item<double>()});
                 netYStresses_j.push_back({sigma_yy[i].item<double>()});
+                netZStresses_j.push_back({sigma_zz[i].item<double>()});
                 // add the poisson ratio to the json object
-                netPoisson_j.push_back({poisson_re[i].item<double>()});
+                //netPoisson_j.push_back({poisson_re[i].item<double>()});
             }
 
             // write the stresses and poisson ratios to the json file
             appendToJsonFile("net_VmStresses", netVmStresses_j);
             appendToJsonFile("net_XStresses", netXStresses_j);
             appendToJsonFile("net_YStresses", netYStresses_j);
-            appendToJsonFile("net_Poisson", netPoisson_j);
+            appendToJsonFile("net_ZStresses", netZStresses_j);
+            //appendToJsonFile("net_Poisson", netPoisson_j);
 
             // CALCULATE THE NEW POSITION OF THE COLLPTS
 
             // create a tensor of the collocation points
             torch::Tensor collPtsFirstAsTensor = torch::stack(
-                {std::get<0>(collPts_.first), std::get<1>(collPts_.first)}, 1);
+                {std::get<0>(collPts_.first), std::get<1>(collPts_.first), std::get<2>(collPts_.first)}, 1);
             auto displacementOfCollPts = this->template output<0>().eval(collPts_.first);
             torch::Tensor displacementAsTensor = torch::stack(
-                {*(displacementOfCollPts[0]), *(displacementOfCollPts[1]) }, 1);
+                {*(displacementOfCollPts[0]), *(displacementOfCollPts[1]), *(displacementOfCollPts[2])}, 1);
 
             // create json objects for the collocation points' reference and displaced position
             nlohmann::json collPtsFirst_j = nlohmann::json::array();
@@ -1153,12 +1265,15 @@ public:
             for (int i = 0; i < collPtsFirstAsTensor.size(0); ++i) {
                 // reference position of the collocation points
                 collPtsFirst_j.push_back({collPtsFirstAsTensor[i][0].item<double>(), 
-                                        collPtsFirstAsTensor[i][1].item<double>()});
+                                        collPtsFirstAsTensor[i][1].item<double>(), 
+                                        collPtsFirstAsTensor[i][2].item<double>()});
                 // new position of the collocation points
                 collPtsFirstDispl_j.push_back({collPtsFirstAsTensor[i][0].item<double>() + 
                                             displacementAsTensor[i][0].item<double>(), 
                                             collPtsFirstAsTensor[i][1].item<double>() + 
-                                            displacementAsTensor[i][1].item<double>()});
+                                            displacementAsTensor[i][1].item<double>(), 
+                                            collPtsFirstAsTensor[i][2].item<double>() + 
+                                            displacementAsTensor[i][2].item<double>()});
             }
             // write the collocation points' original position to the json file
             appendToJsonFile("net_collPtsFirstAsTensor", collPtsFirst_j);
@@ -1169,15 +1284,18 @@ public:
 
             nlohmann::json netDivergenceX_j = nlohmann::json::array();
             nlohmann::json netDivergenceY_j = nlohmann::json::array();
+            nlohmann::json netDivergenceZ_j = nlohmann::json::array();
 
             for (int i = 0; i < divStressX.size(0); ++i) {
                 netDivergenceX_j.push_back({divStressX[i].item<double>()});
                 netDivergenceY_j.push_back({divStressY[i].item<double>()});
+                netDivergenceZ_j.push_back({divStressZ[i].item<double>()});
             }
 
             // write the divergence of the stress tensor to the json file
             appendToJsonFile("net_DivergenceX", netDivergenceX_j);
             appendToJsonFile("net_DivergenceY", netDivergenceY_j);
+            appendToJsonFile("net_DivergenceZ", netDivergenceZ_j);
         }
         return totalLoss;
     }
@@ -1245,12 +1363,12 @@ int main() {
     int DEGREE_CFG = 0;
 
     // boundary conditions
-    std::vector<std::tuple<int, double, double>> FORCE_SIDES;
-    std::vector<std::tuple<int, double, double>> DIRI_SIDES;
+    std::vector<std::tuple<int, double, double, double>> FORCE_SIDES;
+    std::vector<std::tuple<int, double, double, double>> DIRI_SIDES;
     std::vector<int> TFBC_SIDES;
 
     // body force
-    std::pair<double, double> BODY_FORCE{0.0, 0.0};
+    std::array<double, 3> BODY_FORCE{0.0, 0.0, 0.0};
 
     try {
         // material
@@ -1272,12 +1390,12 @@ int main() {
         // BCs
         FORCE_SIDES.clear();
         for (const auto& fsj : require(j, "boundary_conditions.force_sides")) {
-            FORCE_SIDES.emplace_back(fsj.at(0).get<int>(), fsj.at(1).get<double>(), fsj.at(2).get<double>());
+            FORCE_SIDES.emplace_back(fsj.at(0).get<int>(), fsj.at(1).get<double>(), fsj.at(2).get<double>(), fsj.at(3).get<double>());
         }
 
         DIRI_SIDES.clear();
         for (const auto& dsj : require(j, "boundary_conditions.diri_sides")) {
-            DIRI_SIDES.emplace_back(dsj.at(0).get<int>(), dsj.at(1).get<double>(), dsj.at(2).get<double>());
+            DIRI_SIDES.emplace_back(dsj.at(0).get<int>(), dsj.at(1).get<double>(), dsj.at(2).get<double>(), dsj.at(3).get<double>());
         }
 
         TFBC_SIDES = require(j, "boundary_conditions.tfbc_sides").get<std::vector<int>>();
@@ -1285,8 +1403,9 @@ int main() {
         // body force
         {
             const auto& bf = require(j, "body_force");
-            BODY_FORCE.first = bf.at(0).get<double>();
-            BODY_FORCE.second = bf.at(1).get<double>();
+            BODY_FORCE[0] = bf.at(0).get<double>();
+            BODY_FORCE[1] = bf.at(1).get<double>();
+            BODY_FORCE[2] = bf.at(2).get<double>();
         }
 
         // reference simulation (only if present in config)
@@ -1327,10 +1446,10 @@ int main() {
             // Number of B-spline coefficients of the variable 
             std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS, NR_CTRL_PTS)) );
 
-        // imposing body force
-        net.template output<0>().transform([=](const std::array<real_t, 3> xi) {
-            return std::array<real_t, 3>{BODY_FORCE.first, BODY_FORCE.second, BODY_FORCE.third};
-        });
+        // imposing body force - ich brauche Volumenkraft und keine Randkraft
+       /* net.template output<0>().transform([=](const std::array<real_t, 3> xi) {
+            return std::array<real_t, 3>{BODY_FORCE[0], BODY_FORCE[1], BODY_FORCE[2]};
+        });*/
 
         // get the coefficients of the control points
         torch::Tensor ctrlPtsCoeffs = net.template input<0>().as_tensor().slice(0, 0, NR_CTRL_PTS);
@@ -1345,62 +1464,127 @@ int main() {
             int sideNr = std::get<0>(side);
             double xDispl = std::get<1>(side);
             double yDispl = std::get<2>(side);
+            double zDispl = std::get<3>(side);
 
             switch (sideNr) {
                 case 1:
                     net.ref().boundary().template side<1>().template transform<1>(
-                        [=](const std::array<real_t, 1> &xi) {
+                        [=](const std::array<real_t, 2> &xi) {
                             return std::array<real_t, 1>{xDispl};
                         },
                         std::array<iganet::short_t, 1>{0} 
                     );
                     net.ref().boundary().template side<1>().template transform<1>(
-                        [=](const std::array<real_t, 1> &xi) {
+                        [=](const std::array<real_t, 2> &xi) {
                             return std::array<real_t, 1>{yDispl};
                         },
                         std::array<iganet::short_t, 1>{1}
+                    );
+                    net.ref().boundary().template side<1>().template transform<1>(
+                        [=](const std::array<real_t, 2> &xi) {
+                            return std::array<real_t, 1>{zDispl};
+                        },
+                        std::array<iganet::short_t, 1>{2}
                     );
                     break;
                 case 2:
                     net.ref().boundary().template side<2>().template transform<1>(
-                        [=](const std::array<real_t, 1> &xi) {
+                        [=](const std::array<real_t, 2> &xi) {
                             return std::array<real_t, 1>{xDispl};
                         },
                         std::array<iganet::short_t, 1>{0} 
                     );
                     net.ref().boundary().template side<2>().template transform<1>(
-                        [=](const std::array<real_t, 1> &xi) {
+                        [=](const std::array<real_t, 2> &xi) {
                             return std::array<real_t, 1>{yDispl};
                         },
                         std::array<iganet::short_t, 1>{1}
+                    );
+                    net.ref().boundary().template side<2>().template transform<1>(
+                        [=](const std::array<real_t, 2> &xi) {
+                            return std::array<real_t, 1>{zDispl};
+                        },
+                        std::array<iganet::short_t, 1>{2}
                     );
                     break;
                 case 3:
                     net.ref().boundary().template side<3>().template transform<1>(
-                        [=](const std::array<real_t, 1> &xi) {
+                        [=](const std::array<real_t, 2> &xi) {
                             return std::array<real_t, 1>{xDispl};
                         },
                         std::array<iganet::short_t, 1>{0} 
                     );
                     net.ref().boundary().template side<3>().template transform<1>(
-                        [=](const std::array<real_t, 1> &xi) {
+                        [=](const std::array<real_t, 2> &xi) {
                             return std::array<real_t, 1>{yDispl};
                         },
                         std::array<iganet::short_t, 1>{1}
                     );
+                    net.ref().boundary().template side<3>().template transform<1>(
+                        [=](const std::array<real_t, 2> &xi) {
+                            return std::array<real_t, 1>{zDispl};
+                        },
+                        std::array<iganet::short_t, 1>{2}
+                    );
                     break;
                 case 4:
                     net.ref().boundary().template side<4>().template transform<1>(
-                        [=](const std::array<real_t, 1> &xi) {
+                        [=](const std::array<real_t, 2> &xi) {
                             return std::array<real_t, 1>{xDispl};
                         },
                         std::array<iganet::short_t, 1>{0} 
                     );
                     net.ref().boundary().template side<4>().template transform<1>(
-                        [=](const std::array<real_t, 1> &xi) {
+                        [=](const std::array<real_t, 2> &xi) {
                             return std::array<real_t, 1>{yDispl};
                         },
                         std::array<iganet::short_t, 1>{1}
+                    );
+                    net.ref().boundary().template side<4>().template transform<1>(
+                        [=](const std::array<real_t, 2> &xi) {
+                            return std::array<real_t, 1>{zDispl};
+                        },
+                        std::array<iganet::short_t, 1>{2}
+                    );
+                    break;
+                case 5:
+                    net.ref().boundary().template side<5>().template transform<1>(
+                        [=](const std::array<real_t, 2> &xi) {
+                            return std::array<real_t, 1>{xDispl};
+                        },
+                        std::array<iganet::short_t, 1>{0} 
+                    );
+                    net.ref().boundary().template side<5>().template transform<1>(
+                        [=](const std::array<real_t, 2> &xi) {
+                            return std::array<real_t, 1>{yDispl};
+                        },
+                        std::array<iganet::short_t, 1>{1}
+                    );
+                    net.ref().boundary().template side<5>().template transform<1>(
+                        [=](const std::array<real_t, 2> &xi) {
+                            return std::array<real_t, 1>{zDispl};
+                        },
+                        std::array<iganet::short_t, 1>{2}
+                    );
+                    break;
+                case 6:
+                    net.ref().boundary().template side<6>().template transform<1>(
+                        [=](const std::array<real_t, 2> &xi) {
+                            return std::array<real_t, 1>{xDispl};
+                        },
+                        std::array<iganet::short_t, 1>{0} 
+                    );
+                    net.ref().boundary().template side<6>().template transform<1>(
+                        [=](const std::array<real_t, 2> &xi) {
+                            return std::array<real_t, 1>{yDispl};
+                        },
+                        std::array<iganet::short_t, 1>{1}
+                    );
+                    net.ref().boundary().template side<6>().template transform<1>(
+                        [=](const std::array<real_t, 2> &xi) {
+                            return std::array<real_t, 1>{zDispl};
+                        },
+                        std::array<iganet::short_t, 1>{2}
                     );
                     break;
                 default:
@@ -1434,24 +1618,20 @@ int main() {
         torch::Tensor geometryAsTensor = net.template input<0>().as_tensor();
         torch::Tensor displacementAsTensor = net.template output<0>().as_tensor();
         
-        // creating collection matrix for all the control points (iganet)
-        torch::Tensor netCtrlPts = torch::zeros({NR_CTRL_PTS * NR_CTRL_PTS, 2});
-        // creating collection matrix for all the displacements (iganet)
-        torch::Tensor netDisplacements = torch::zeros({NR_CTRL_PTS * NR_CTRL_PTS, 2});
-
-        // filling the collection matrices with the values from the tensors
-        for (int i = 0; i < NR_CTRL_PTS * NR_CTRL_PTS; ++i) {
-            double x = geometryAsTensor[i].item<double>();          
-            double y = geometryAsTensor[i + NR_CTRL_PTS * NR_CTRL_PTS].item<double>();
-            netCtrlPts[i][0] = x;
-            netCtrlPts[i][1] = y;
+        int64_t N3 = NR_CTRL_PTS * NR_CTRL_PTS * NR_CTRL_PTS; // [CHANGE 2D->3D]
+        torch::Tensor netCtrlPts     = torch::zeros({N3, 3});
+        torch::Tensor netDisplacements = torch::zeros({N3, 3});
+ 
+        for (int i = 0; i < N3; ++i) {
+            netCtrlPts[i][0] = geometryAsTensor[i].item<double>();
+            netCtrlPts[i][1] = geometryAsTensor[i + N3].item<double>();
+            netCtrlPts[i][2] = geometryAsTensor[i + 2 * N3].item<double>(); // [CHANGE 2D->3D]
                 
-            double ux = displacementAsTensor[i].item<double>();
-            double uy = displacementAsTensor[i + NR_CTRL_PTS * NR_CTRL_PTS].item<double>();
-            netDisplacements[i][0] = ux;
-            netDisplacements[i][1] = uy;
+            netDisplacements[i][0] = displacementAsTensor[i].item<double>();
+            netDisplacements[i][1] = displacementAsTensor[i + N3].item<double>();
+            netDisplacements[i][2] = displacementAsTensor[i + 2 * N3].item<double>(); // [CHANGE 2D->3D]
         }
-
+        
         // deformed position of the control points
         torch::Tensor displacedNetCtrlPts = netCtrlPts + netDisplacements;
 
@@ -1460,7 +1640,9 @@ int main() {
         for (int i = 0; i < displacedNetCtrlPts.size(0); ++i) {
             displacedNetCtrlPts_j.push_back({
                 displacedNetCtrlPts[i][0].item<double>(),
-                displacedNetCtrlPts[i][1].item<double>()
+                displacedNetCtrlPts[i][1].item<double>(),
+                displacedNetCtrlPts[i][2].item<double>()
+
             });
         }
 
