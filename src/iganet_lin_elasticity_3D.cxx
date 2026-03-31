@@ -72,90 +72,150 @@ private:
     bool SUPERVISED_LEARNING_;
 
     bool isDirichletSide(int sideNr) const {
-    return std::any_of(
-        DIRI_SIDES_.begin(), DIRI_SIDES_.end(),
-        [&](const auto& t) { return std::get<0>(t) == sideNr; }
-    );
-}
-
-torch::Tensor buildDirichletKeepMask(int sideNr) const {
-    at::Tensor a, b;
-
-    // boundary point coordinates of the corresponding side
-    // side 1,2 -> local coords (y,z)
-    // side 3,4 -> local coords (x,z)
-    // side 5,6 -> local coords (x,y)
-    switch (sideNr) {
-        case 1:
-            a = std::get<0>(collPts_.second)[0];
-            b = std::get<0>(collPts_.second)[1];
-            break;
-        case 2:
-            a = std::get<1>(collPts_.second)[0];
-            b = std::get<1>(collPts_.second)[1];
-            break;
-        case 3:
-            a = std::get<2>(collPts_.second)[0];
-            b = std::get<2>(collPts_.second)[1];
-            break;
-        case 4:
-            a = std::get<3>(collPts_.second)[0];
-            b = std::get<3>(collPts_.second)[1];
-            break;
-        case 5:
-            a = std::get<4>(collPts_.second)[0];
-            b = std::get<4>(collPts_.second)[1];
-            break;
-        case 6:
-            a = std::get<5>(collPts_.second)[0];
-            b = std::get<5>(collPts_.second)[1];
-            break;
-        default:
-            throw std::invalid_argument("Dirichlet side must be 1..6.");
+        return std::any_of(
+            DIRI_SIDES_.begin(), DIRI_SIDES_.end(),
+            [&](const auto& t) { return std::get<0>(t) == sideNr; }
+        );
     }
 
-    torch::Tensor keepMask = torch::ones(
-        {a.size(0)},
-        torch::TensorOptions().dtype(torch::kBool).device(a.device())
-    );
+    bool isNeumannSide(int sideNr) const {
+        return std::any_of(
+            FORCE_SIDES_.begin(), FORCE_SIDES_.end(),
+            [&](const auto& t) { return std::get<0>(t) == sideNr; }
+        );
+    }
 
-    auto exclude_if_lower_dirichlet = [&](int otherSide, const at::Tensor& onOtherSide) {
-        if (isDirichletSide(otherSide) && otherSide < sideNr) {
+    // Priority:
+    // Dirichlet   -> 3
+    // Neumann     -> 2
+    // TractionFree-> 1
+    int bc_priority(int sideNr) const {
+        if (isDirichletSide(sideNr)) {
+            return 3;
+        }
+        if (isNeumannSide(sideNr)) {
+            return 2;
+        }
+        return 1; // otherwise traction-free
+    }
+
+    // true if otherSide has priority over sideNr
+    bool bc_other_wins(int otherSide, int sideNr) const {
+        int otherPriority = bc_priority(otherSide);
+        int thisPriority  = bc_priority(sideNr);
+
+        if (otherPriority > thisPriority) {
+            return true;
+        }
+
+        if (otherPriority == thisPriority && otherSide < sideNr) {
+            return true;
+        }
+
+        return false;
+    }
+
+    // opposite faces do not intersect, all other distinct side pairs do
+    bool sidesIntersect(int sideA, int sideB) const {
+        if (sideA == sideB) {
+            return false;
+        }
+
+        if ((sideA == 1 && sideB == 2) || (sideA == 2 && sideB == 1) ||
+            (sideA == 3 && sideB == 4) || (sideA == 4 && sideB == 3) ||
+            (sideA == 5 && sideB == 6) || (sideA == 6 && sideB == 5)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    // returns full 3D face coordinates of boundary collocation points
+    std::array<torch::Tensor, 3> getFaceBoundaryPoints(int sideNr) const {
+        switch (sideNr) {
+            case 1: { // x = 0, local coords = (y,z)
+                at::Tensor Y = std::get<0>(collPts_.second)[0];
+                at::Tensor Z = std::get<0>(collPts_.second)[1];
+                return {torch::zeros_like(Y), Y, Z};
+            }
+            case 2: { // x = 1, local coords = (y,z)
+                at::Tensor Y = std::get<1>(collPts_.second)[0];
+                at::Tensor Z = std::get<1>(collPts_.second)[1];
+                return {torch::ones_like(Y), Y, Z};
+            }
+            case 3: { // y = 0, local coords = (x,z)
+                at::Tensor X = std::get<2>(collPts_.second)[0];
+                at::Tensor Z = std::get<2>(collPts_.second)[1];
+                return {X, torch::zeros_like(X), Z};
+            }
+            case 4: { // y = 1, local coords = (x,z)
+                at::Tensor X = std::get<3>(collPts_.second)[0];
+                at::Tensor Z = std::get<3>(collPts_.second)[1];
+                return {X, torch::ones_like(X), Z};
+            }
+            case 5: { // z = 0, local coords = (x,y)
+                at::Tensor X = std::get<4>(collPts_.second)[0];
+                at::Tensor Y = std::get<4>(collPts_.second)[1];
+                return {X, Y, torch::zeros_like(X)};
+            }
+            case 6: { // z = 1, local coords = (x,y)
+                at::Tensor X = std::get<5>(collPts_.second)[0];
+                at::Tensor Y = std::get<5>(collPts_.second)[1];
+                return {X, Y, torch::ones_like(X)};
+            }
+            default:
+                throw std::invalid_argument("Boundary side must be 1..6.");
+        }
+    }
+
+    // mask of points on pts that also lie on otherSide
+    torch::Tensor maskPointsOnOtherSide(
+        const std::array<torch::Tensor, 3>& pts,
+        int otherSide) const
+    {
+        const auto& X = pts[0];
+        const auto& Y = pts[1];
+        const auto& Z = pts[2];
+
+        switch (otherSide) {
+            case 1: return torch::isclose(X, torch::zeros_like(X)); // x=0
+            case 2: return torch::isclose(X, torch::ones_like(X));  // x=1
+            case 3: return torch::isclose(Y, torch::zeros_like(Y)); // y=0
+            case 4: return torch::isclose(Y, torch::ones_like(Y));  // y=1
+            case 5: return torch::isclose(Z, torch::zeros_like(Z)); // z=0
+            case 6: return torch::isclose(Z, torch::ones_like(Z));  // z=1
+            default:
+                throw std::invalid_argument("Boundary side must be 1..6.");
+        }
+    }
+
+    // general keep-mask for any boundary side:
+    // Dirichlet > Neumann > TractionFree
+    // same priority -> smaller side number wins
+    torch::Tensor buildKeepMaskForSide(int sideNr) const {
+        auto pts = getFaceBoundaryPoints(sideNr);
+        const auto& X = pts[0];
+
+        torch::Tensor keepMask = torch::ones(
+            {X.size(0)},
+            torch::TensorOptions().dtype(torch::kBool).device(X.device())
+        );
+
+        for (int otherSide = 1; otherSide <= 6; ++otherSide) {
+            if (!sidesIntersect(sideNr, otherSide)) {
+                continue;
+            }
+
+            if (!bc_other_wins(otherSide, sideNr)) {
+                continue;
+            }
+
+            torch::Tensor onOtherSide = maskPointsOnOtherSide(pts, otherSide);
             keepMask = torch::logical_and(keepMask, torch::logical_not(onOtherSide));
         }
-    };
 
-    switch (sideNr) {
-        // side 1,2: local coordinates are (y,z)
-        case 1:
-        case 2:
-            exclude_if_lower_dirichlet(3, torch::isclose(a, torch::zeros_like(a))); // y=0
-            exclude_if_lower_dirichlet(4, torch::isclose(a, torch::ones_like(a)));  // y=1
-            exclude_if_lower_dirichlet(5, torch::isclose(b, torch::zeros_like(b))); // z=0
-            exclude_if_lower_dirichlet(6, torch::isclose(b, torch::ones_like(b)));  // z=1
-            break;
-
-        // side 3,4: local coordinates are (x,z)
-        case 3:
-        case 4:
-            exclude_if_lower_dirichlet(1, torch::isclose(a, torch::zeros_like(a))); // x=0
-            exclude_if_lower_dirichlet(2, torch::isclose(a, torch::ones_like(a)));  // x=1
-            exclude_if_lower_dirichlet(5, torch::isclose(b, torch::zeros_like(b))); // z=0
-            exclude_if_lower_dirichlet(6, torch::isclose(b, torch::ones_like(b)));  // z=1
-            break;
-
-        // side 5,6: local coordinates are (x,y)
-        case 5:
-        case 6:
-            exclude_if_lower_dirichlet(1, torch::isclose(a, torch::zeros_like(a))); // x=0
-            exclude_if_lower_dirichlet(2, torch::isclose(a, torch::ones_like(a)));  // x=1
-            exclude_if_lower_dirichlet(3, torch::isclose(b, torch::zeros_like(b))); // y=0
-            exclude_if_lower_dirichlet(4, torch::isclose(b, torch::ones_like(b)));  // y=1
-            break;
+        return keepMask;
     }
-
-    return keepMask;
-}
   
 public:
     /// @brief Constructor
@@ -518,39 +578,7 @@ public:
             for (const auto& force : FORCE_SIDES_) {
                 neumannSides.push_back(std::get<0>(force));
             }
-
-            // collect all BC sides once
-            std::vector<int> allBcSides;
-            for (const auto& d : DIRI_SIDES_)  allBcSides.push_back(std::get<0>(d));
-            for (const auto& f : FORCE_SIDES_) allBcSides.push_back(std::get<0>(f));
-            for (int s : TFBC_SIDES_)          allBcSides.push_back(s);
-
-            std::sort(allBcSides.begin(), allBcSides.end());
-            allBcSides.erase(std::unique(allBcSides.begin(), allBcSides.end()), allBcSides.end());
-
-            auto is_diri_side = [&](int side) -> bool {
-                return std::any_of(DIRI_SIDES_.begin(), DIRI_SIDES_.end(),
-                    [&](const auto& t) { return std::get<0>(t) == side; });
-            };
-
-            auto is_force_side = [&](int side) -> bool {
-                return std::any_of(FORCE_SIDES_.begin(), FORCE_SIDES_.end(),
-                    [&](const auto& t) { return std::get<0>(t) == side; });
-            };
-
-            auto is_tf_side = [&](int side) -> bool {
-                return std::find(TFBC_SIDES_.begin(), TFBC_SIDES_.end(), side) != TFBC_SIDES_.end();
-            };
-
-            // priority: Dirichlet > Force > TractionFree
-            auto bc_priority = [&](int side) -> int {
-                if (is_diri_side(side))  return 3;
-                if (is_force_side(side)) return 2;
-                if (is_tf_side(side))    return 1;
-                return 0;
-            };
-
-            // static storage of all traction collocation points
+             // static storage of all traction collocation points
             static std::array<torch::Tensor, 3ul> tractionCollPts;
             static std::vector<int> nPtsPerSide;
 
@@ -599,41 +627,6 @@ public:
                 }
             };
 
-                // returns true if side and otherSide intersect along an edge
-                auto should_exclude_by_side = [&](int side, int otherSide) -> bool
-                {
-                    if (side == otherSide) {
-                        return false;
-                    }
-
-                    // opposite faces do not intersect
-                    if ((side == 1 && otherSide == 2) || (side == 2 && otherSide == 1) ||
-                        (side == 3 && otherSide == 4) || (side == 4 && otherSide == 3) ||
-                        (side == 5 && otherSide == 6) || (side == 6 && otherSide == 5)) {
-                        return false;
-                    }
-
-                    return true;
-                };
-
-                // mask points that lie on a specific side
-                auto mask_points_on_side = [&](const at::Tensor& X,
-                                            const at::Tensor& Y,
-                                            const at::Tensor& Z,
-                                            int side) -> at::Tensor
-                {
-                    switch (side) {
-                        case 1: return torch::isclose(X, torch::zeros_like(X));
-                        case 2: return torch::isclose(X, torch::ones_like(X));
-                        case 3: return torch::isclose(Y, torch::zeros_like(Y));
-                        case 4: return torch::isclose(Y, torch::ones_like(Y));
-                        case 5: return torch::isclose(Z, torch::zeros_like(Z));
-                        case 6: return torch::isclose(Z, torch::ones_like(Z));
-                        default:
-                            throw std::invalid_argument("Side for 3D mask has to be 1..6.");
-                    }
-                };
-
                 for (int side : neumannSides)
                 {
                     auto facePts = make_face_points(side);
@@ -644,31 +637,7 @@ public:
                     // unique ownership on edges/corners:
                     // Dirichlet > Force > TractionFree
                     // within same priority: smaller side number wins
-                    at::Tensor keepMask = torch::ones({X.size(0)}, torch::TensorOptions().dtype(torch::kBool));
-                    const int currentPriority = bc_priority(side);
-
-                    for (int otherSide : allBcSides)
-                    {
-                        if (otherSide == side) {
-                            continue;
-                        }
-
-                        if (!should_exclude_by_side(side, otherSide)) {
-                            continue;
-                        }
-
-                        const int otherPriority = bc_priority(otherSide);
-                        const bool otherWins =
-                            (otherPriority > currentPriority) ||
-                            (otherPriority == currentPriority && otherSide < side);
-
-                        if (!otherWins) {
-                            continue;
-                        }
-
-                        at::Tensor onOtherSide = mask_points_on_side(X, Y, Z, otherSide);
-                        keepMask = torch::logical_and(keepMask, torch::logical_not(onOtherSide));
-                    }
+                    at::Tensor keepMask = buildKeepMaskForSide(side);
 
                     at::Tensor idx = torch::nonzero(keepMask).reshape({-1});
 
@@ -974,7 +943,7 @@ public:
                             const torch::Tensor& b2,
                             int sideNr) -> torch::Tensor
             {
-                torch::Tensor keepMask = buildDirichletKeepMask(sideNr);
+                torch::Tensor keepMask = buildKeepMaskForSide(sideNr);
                 torch::Tensor keepIdx = torch::nonzero(keepMask).reshape({-1});
 
                 if (keepIdx.numel() == 0) {
@@ -1100,7 +1069,7 @@ public:
                             const torch::Tensor& b2,
                             int sideNr) -> torch::Tensor
             {
-                torch::Tensor keepMask = buildDirichletKeepMask(sideNr);
+                torch::Tensor keepMask = buildKeepMaskForSide(sideNr);
                 torch::Tensor keepIdx = torch::nonzero(keepMask).reshape({-1});
 
                 if (keepIdx.numel() == 0) {
@@ -1332,15 +1301,15 @@ int main() {
         return 1;
     }
 
-    // run standard collocation simulation with the parameters from the config file 
-    const std::string cmd =
-        "cd \"" + repo_root.string() + "\" && python3 run_std_coll.py";
+    // // run standard collocation simulation with the parameters from the config file 
+    // const std::string cmd =
+    //     "cd \"" + repo_root.string() + "\" && python3 run_std_coll.py";
 
-    const int ret = std::system(cmd.c_str());
-    if (ret != 0) {
-        std::cerr << "ERROR: python reference run (run_std_coll.py) failed. system() returned " << ret << "\n";
-        return 1;
-    }
+    // const int ret = std::system(cmd.c_str());
+    // if (ret != 0) {
+    //     std::cerr << "ERROR: python reference run (run_std_coll.py) failed. system() returned " << ret << "\n";
+    //     return 1;
+    // }
 
     // material parameters
     double YOUNG_MODULUS = 0.0;
