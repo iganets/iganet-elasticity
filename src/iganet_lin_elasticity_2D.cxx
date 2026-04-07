@@ -136,10 +136,7 @@ public:
     }
 
     /// @brief helper function to load the std collocation displacements from a JSON file
-    torch::Tensor loadDisplacements() {
-        // create options for the tensor
-        auto options = torch::TensorOptions().dtype(torch::kDouble).device(torch::kCPU);
-    
+    torch::Tensor loadDisplacements(const torch::TensorOptions& options) {
         // open the JSON file
         std::ifstream file(JSON_PATH_);
         if (!file.is_open()) {
@@ -333,7 +330,6 @@ public:
 
     /// @brief Initializes the epoch
     bool epoch(int64_t epoch) override {
-    
         // print epoch number
         std::cout << "Epoch: " << epoch << std::endl;   
 
@@ -391,7 +387,6 @@ public:
 
     /// @brief Computes the loss function
     torch::Tensor loss(const torch::Tensor &outputs, int64_t epoch) override {
-
         // create u_ from the training's outputs
         this->template output<0>().from_tensor(outputs);
 
@@ -456,7 +451,7 @@ public:
                             == diriOrForceSides.end()) {     
 
                             at::Tensor collPtsY_tensor = std::get<0>(collPts_.second)[0];
-                            tractionCollPtsX.push_back(torch::zeros({nrCollPts_ - 1}));
+                            tractionCollPtsX.push_back(torch::zeros({nrCollPts_ - 1}, collPtsY_tensor.options()));
                             tractionCollPtsY.push_back(collPtsY_tensor.slice(0, 1));
                             // 1 collPt has to be removed
                             intersecCtr.push_back(1);
@@ -468,7 +463,7 @@ public:
                                 != diriOrForceSides.end()) {
             
                             at::Tensor collPtsY_tensor = std::get<0>(collPts_.second)[0];
-                            tractionCollPtsX.push_back(torch::zeros({nrCollPts_ - 1}));
+                            tractionCollPtsX.push_back(torch::zeros({nrCollPts_ - 1}, collPtsY_tensor.options()));
                             tractionCollPtsY.push_back(collPtsY_tensor.slice(0, 0, -1));
                             // 1 collPt has to be removed
                             intersecCtr.push_back(1);
@@ -480,13 +475,13 @@ public:
                                 != diriOrForceSides.end()) {
                             
                             at::Tensor collPtsY_tensor = std::get<0>(collPts_.second)[0];
-                            tractionCollPtsX.push_back(torch::zeros({nrCollPts_ - 2}));  
+                            tractionCollPtsX.push_back(torch::zeros({nrCollPts_ - 2}, collPtsY_tensor.options()));  
                             tractionCollPtsY.push_back(collPtsY_tensor.slice(0, 1, -1));
                             // 2 collPts have to be removed
                             intersecCtr.push_back(2);
                         }
                         else {
-                            tractionCollPtsX.push_back(torch::zeros(nrCollPts_));
+                            tractionCollPtsX.push_back(torch::zeros(nrCollPts_, std::get<0>(collPts_.second)[0].options()));
                             tractionCollPtsY.push_back(std::get<0>(collPts_.second)[0]);
                             // no collPt has to be removed
                             intersecCtr.push_back(0);
@@ -500,7 +495,7 @@ public:
                             == diriOrForceSides.end()) {    
 
                             at::Tensor collPtsY_tensor = std::get<0>(collPts_.second)[0];
-                            tractionCollPtsX.push_back(torch::ones({nrCollPts_ - 1}));
+                            tractionCollPtsX.push_back(torch::ones({nrCollPts_ - 1}, collPtsY_tensor.options()));
                             tractionCollPtsY.push_back(collPtsY_tensor.slice(0, 1));
                             // 1 collPt has to be removed
                             intersecCtr.push_back(1);
@@ -512,7 +507,7 @@ public:
                                 != diriOrForceSides.end()) {
 
                             at::Tensor collPtsY_tensor = std::get<0>(collPts_.second)[0];
-                            tractionCollPtsX.push_back(torch::ones({nrCollPts_ - 1}));
+                            tractionCollPtsX.push_back(torch::ones({nrCollPts_ - 1}, collPtsY_tensor.options()));
                             tractionCollPtsY.push_back(collPtsY_tensor.slice(0, 0, -1));
                             // 1 collPt has to be removed
                             intersecCtr.push_back(1);
@@ -524,13 +519,13 @@ public:
                                 != diriOrForceSides.end()) {
 
                             at::Tensor collPtsY_tensor = std::get<0>(collPts_.second)[0];
-                            tractionCollPtsX.push_back(torch::ones({nrCollPts_ - 2}));
+                            tractionCollPtsX.push_back(torch::ones({nrCollPts_ - 2}, collPtsY_tensor.options()));
                             tractionCollPtsY.push_back(collPtsY_tensor.slice(0, 1, -1));
                             // 2 collPts have to be removed
                             intersecCtr.push_back(2);
                         }
                         else {
-                            tractionCollPtsX.push_back(torch::ones(nrCollPts_));
+                            tractionCollPtsX.push_back(torch::ones(nrCollPts_, std::get<0>(collPts_.second)[0].options()));
                             tractionCollPtsY.push_back(std::get<0>(collPts_.second)[0]);
                             // no collPt has to be removed
                             intersecCtr.push_back(0);
@@ -546,7 +541,7 @@ public:
 
                             at::Tensor collPtsX_tensor = std::get<0>(collPts_.second)[0];
                             tractionCollPtsX.push_back(collPtsX_tensor.slice(0, 1));
-                            tractionCollPtsY.push_back(torch::zeros({nrCollPts_ - 1}));
+                            tractionCollPtsY.push_back(torch::zeros({nrCollPts_ - 1}, collPtsX_tensor.options()));
                             // 1 collPt has to be removed
                             intersecCtr.push_back(1);
                         }
@@ -558,7 +553,7 @@ public:
 
                             at::Tensor collPtsX_tensor = std::get<0>(collPts_.second)[0];
                             tractionCollPtsX.push_back(collPtsX_tensor.slice(0, 0, -1));
-                            tractionCollPtsY.push_back(torch::zeros({nrCollPts_ - 1}));
+                            tractionCollPtsY.push_back(torch::zeros({nrCollPts_ - 1}, collPtsX_tensor.options()));
                             // 1 collPt has to be removed
                             intersecCtr.push_back(1);
                         }
@@ -570,13 +565,13 @@ public:
 
                             at::Tensor collPtsX_tensor = std::get<0>(collPts_.second)[0];
                             tractionCollPtsX.push_back(collPtsX_tensor.slice(0, 1, -1));
-                            tractionCollPtsY.push_back(torch::zeros({nrCollPts_ - 2}));
+                            tractionCollPtsY.push_back(torch::zeros({nrCollPts_ - 2}, collPtsX_tensor.options()));
                             // 2 collPts have to be removed
                             intersecCtr.push_back(2);
                         }
                         else {
                             tractionCollPtsX.push_back(std::get<0>(collPts_.second)[0]);
-                            tractionCollPtsY.push_back(torch::zeros(nrCollPts_));
+                            tractionCollPtsY.push_back(torch::zeros(nrCollPts_, std::get<0>(collPts_.second)[0].options()));
                             // no collPt has to be removed
                             intersecCtr.push_back(0);
                         }
@@ -590,7 +585,7 @@ public:
 
                             at::Tensor collPtsX_tensor = std::get<0>(collPts_.second)[0];
                             tractionCollPtsX.push_back(collPtsX_tensor.slice(0, 1));
-                            tractionCollPtsY.push_back(torch::ones({nrCollPts_ - 1}));
+                            tractionCollPtsY.push_back(torch::ones({nrCollPts_ - 1}, collPtsX_tensor.options()));
                             // 1 collPt has to be removed
                             intersecCtr.push_back(1);
                         }
@@ -602,7 +597,7 @@ public:
 
                             at::Tensor collPtsX_tensor = std::get<0>(collPts_.second)[0];
                             tractionCollPtsX.push_back(collPtsX_tensor.slice(0, 0, -1));
-                            tractionCollPtsY.push_back(torch::ones({nrCollPts_ - 1}));
+                            tractionCollPtsY.push_back(torch::ones({nrCollPts_ - 1}, collPtsX_tensor.options()));
                             // 1 collPt has to be removed
                             intersecCtr.push_back(1);
                         }
@@ -614,13 +609,13 @@ public:
 
                             at::Tensor collPtsX_tensor = std::get<0>(collPts_.second)[0];
                             tractionCollPtsX.push_back(collPtsX_tensor.slice(0, 1, -1));
-                            tractionCollPtsY.push_back(torch::ones({nrCollPts_ - 2}));
+                            tractionCollPtsY.push_back(torch::ones({nrCollPts_ - 2}, collPtsX_tensor.options()));
                             // 2 collPts have to be removed
                             intersecCtr.push_back(2);
                         }
                         else {
                             tractionCollPtsX.push_back(std::get<0>(collPts_.second)[0]);
-                            tractionCollPtsY.push_back(torch::ones(nrCollPts_));
+                            tractionCollPtsY.push_back(torch::ones(nrCollPts_, std::get<0>(collPts_.second)[0].options()));
                             // no collPt has to be removed
                             intersecCtr.push_back(0);
                         }
@@ -662,38 +657,36 @@ public:
             auto uy_y = *jacobianBoundary[3];
 
             // allocate tensors for the traction-free boundary conditions (tfbc)
-            torch::Tensor tractionValuesX = torch::zeros({tractionCollPts[0].size(0)});
-            torch::Tensor tractionValuesY = torch::zeros({tractionCollPts[0].size(0)});
+            torch::Tensor tractionValuesX = torch::zeros({tractionCollPts[0].size(0)}, ux_x.options());
+            torch::Tensor tractionValuesY = torch::zeros({tractionCollPts[0].size(0)}, ux_x.options());
             // calculate the traction values at the boundary points
             int pointCtr = 0;
             int sideCtr = 0; 
 
             for (int side : neumannSides) {
                 int n_vals = nrCollPts_ - intersecCtr[sideCtr];
+                auto ux_x_slice = ux_x.slice(0, pointCtr, pointCtr + n_vals);
+                auto ux_y_slice = ux_y.slice(0, pointCtr, pointCtr + n_vals);
+                auto uy_x_slice = uy_x.slice(0, pointCtr, pointCtr + n_vals);
+                auto uy_y_slice = uy_y.slice(0, pointCtr, pointCtr + n_vals);
+                auto tractionValuesXSlice = tractionValuesX.slice(0, pointCtr, pointCtr + n_vals);
+                auto tractionValuesYSlice = tractionValuesY.slice(0, pointCtr, pointCtr + n_vals);
 
-                for (int i = 0; i < n_vals; ++i) {
-                                int idx = pointCtr + i;
-
-                    if (side == 1) {
-                        tractionValuesX[idx] =  - lambda_ * (ux_x[idx] + uy_y[idx]) 
-                                                - 2 * mu_ * ux_x[idx];
-                        tractionValuesY[idx] =  - mu_ * (uy_x[idx] + ux_y[idx]);
-                    }
-                    else if (side == 2) {
-                        tractionValuesX[idx] = lambda_ * (ux_x[idx] + uy_y[idx]) 
-                                            + 2 * mu_ * ux_x[idx];
-                        tractionValuesY[idx] = mu_ * (uy_x[idx] + ux_y[idx]);
-                    }
-                    else if (side == 3) {
-                        tractionValuesX[idx] =  - mu_ * (uy_x[idx] + ux_y[idx]);
-                        tractionValuesY[idx] =  - lambda_ * (ux_x[idx] + uy_y[idx]) 
-                                                - 2 * mu_ * uy_y[idx];
-                    }
-                    else if (side == 4) {
-                        tractionValuesX[idx] = mu_ * (uy_x[idx] + ux_y[idx]);
-                        tractionValuesY[idx] = lambda_ * (ux_x[idx] + uy_y[idx]) 
-                                            + 2 * mu_ * uy_y[idx];
-                    }
+                if (side == 1) {
+                    tractionValuesXSlice.copy_(-lambda_ * (ux_x_slice + uy_y_slice) - 2 * mu_ * ux_x_slice);
+                    tractionValuesYSlice.copy_(-mu_ * (uy_x_slice + ux_y_slice));
+                }
+                else if (side == 2) {
+                    tractionValuesXSlice.copy_(lambda_ * (ux_x_slice + uy_y_slice) + 2 * mu_ * ux_x_slice);
+                    tractionValuesYSlice.copy_(mu_ * (uy_x_slice + ux_y_slice));
+                }
+                else if (side == 3) {
+                    tractionValuesXSlice.copy_(-mu_ * (uy_x_slice + ux_y_slice));
+                    tractionValuesYSlice.copy_(-lambda_ * (ux_x_slice + uy_y_slice) - 2 * mu_ * uy_y_slice);
+                }
+                else if (side == 4) {
+                    tractionValuesXSlice.copy_(mu_ * (uy_x_slice + ux_y_slice));
+                    tractionValuesYSlice.copy_(lambda_ * (ux_x_slice + uy_y_slice) + 2 * mu_ * uy_y_slice);
                 }
 
                 pointCtr += n_vals;
@@ -756,21 +749,12 @@ public:
         auto& uy_yx = hessianColl(1,0,1);
         auto& uy_yy = hessianColl(1,1,1);
 
-        // pre-allocation of the results
-        torch::Tensor divStressX = torch::zeros({hessianColl(0,0,0).size(0)});
-        torch::Tensor divStressY = torch::zeros({hessianColl(0,0,1).size(0)});
-
-        // calculation of the divergence of the stress tensor, this is what we're trying to minimize
-        for (int i = 0; i < hessianColl(0,0,0).size(0); ++i) {
-            // x-direction
-            divStressX[i] = (lambda_ + 2 * mu_) * ux_xx[i] + 
-                            mu_ * ux_yy[i] + (lambda_ + mu_) * uy_xy[i];
-
-            // y-direction
-            divStressY[i] = mu_ * uy_xx[i] + (lambda_ + 2 * mu_) * uy_yy[i] + 
-                            (lambda_ + mu_) * ux_xy[i];
-            
-        }
+        torch::Tensor divStressX = (lambda_ + 2 * mu_) * ux_xx
+                                 + mu_ * ux_yy
+                                 + (lambda_ + mu_) * uy_xy;
+        torch::Tensor divStressY = mu_ * uy_xx
+                                 + (lambda_ + 2 * mu_) * uy_yy
+                                 + (lambda_ + mu_) * ux_xy;
         
         // create a tensor of the divergence of the stress tensor
         torch::Tensor divStress = torch::stack({divStressX, divStressY}, /*dim=*/1);
@@ -818,7 +802,7 @@ public:
                 // add a BC weight for penalization of the training
                 int bcWeight = 1e7;
                 // initialize bcLoss variable
-                bcLoss = torch::tensor(0.0);
+                bcLoss = torch::zeros({}, outputs.options());
 
                 // evaluation of the displacements at the boundary points
                 auto u_bdr = this->template output<0>().template eval<iganet::functionspace::boundary>(collPts_.second);
@@ -880,7 +864,7 @@ public:
             }, 1);
 
             // load the displacements from the std collocation solution
-            torch::Tensor stdCollDisplacements_ = loadDisplacements();
+            torch::Tensor stdCollDisplacements_ = loadDisplacements(netDisplacements_.options());
 
             // supervised loss: MSE of net against standard collocation solution
             gsLoss = 1e9 * torch::mse_loss(netDisplacements_, stdCollDisplacements_);
@@ -915,7 +899,7 @@ public:
                 // add a BC weight for penalization of the training
                 int bcWeight = 1e0;
                 // initialize bcLoss variable
-                bcLoss = torch::tensor(0.0);
+                bcLoss = torch::zeros({}, outputs.options());
 
                 // evaluation of the displacements at the boundary points
                 auto u_bdr = this->template output<0>().template eval<iganet::functionspace::boundary>(collPts_.second);
@@ -982,14 +966,15 @@ public:
             auto uy_y = *jacobian[3];
 
             // allocate the stress tensor
-            torch::Tensor sigma_xx = torch::zeros({jacobian[0]->size(0)});
-            torch::Tensor sigma_xy = torch::zeros({jacobian[0]->size(0)});
-            torch::Tensor sigma_yy = torch::zeros({jacobian[0]->size(0)}); 
-            torch::Tensor sigma_vm = torch::zeros({jacobian[0]->size(0)});   
+            auto __jac_opts = jacobian[0]->options();
+            torch::Tensor sigma_xx = torch::zeros({jacobian[0]->size(0)}, __jac_opts);
+            torch::Tensor sigma_xy = torch::zeros({jacobian[0]->size(0)}, __jac_opts);
+            torch::Tensor sigma_yy = torch::zeros({jacobian[0]->size(0)}, __jac_opts);
+            torch::Tensor sigma_vm = torch::zeros({jacobian[0]->size(0)}, __jac_opts);
 
-            torch::Tensor epsilon_xx = torch::zeros({jacobian[0]->size(0)});
-            torch::Tensor epsilon_yy = torch::zeros({jacobian[0]->size(0)});
-            torch::Tensor poisson_re = torch::zeros({jacobian[0]->size(0)});
+            torch::Tensor epsilon_xx = torch::zeros({jacobian[0]->size(0)}, __jac_opts);
+            torch::Tensor epsilon_yy = torch::zeros({jacobian[0]->size(0)}, __jac_opts);
+            torch::Tensor poisson_re = torch::zeros({jacobian[0]->size(0)}, __jac_opts);
 
             // create json object for the stresses
             nlohmann::json netVmStresses_j = nlohmann::json::array();
@@ -1328,9 +1313,9 @@ int main() {
         torch::Tensor displacementAsTensor = net.template output<0>().as_tensor();
         
         // creating collection matrix for all the control points (iganet)
-        torch::Tensor netCtrlPts = torch::zeros({NR_CTRL_PTS * NR_CTRL_PTS, 2});
+        torch::Tensor netCtrlPts = torch::zeros({NR_CTRL_PTS * NR_CTRL_PTS, 2}, geometryAsTensor.options());
         // creating collection matrix for all the displacements (iganet)
-        torch::Tensor netDisplacements = torch::zeros({NR_CTRL_PTS * NR_CTRL_PTS, 2});
+        torch::Tensor netDisplacements = torch::zeros({NR_CTRL_PTS * NR_CTRL_PTS, 2}, displacementAsTensor.options());
 
         // filling the collection matrices with the values from the tensors
         for (int i = 0; i < NR_CTRL_PTS * NR_CTRL_PTS; ++i) {
@@ -1363,14 +1348,10 @@ int main() {
 
         #ifdef IGANET_WITH_GISMO
         
-            torch::Tensor gsOriginCtrlPts    = torch::empty({0, 2}, 
-                torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-            torch::Tensor gsDisplacements    = torch::empty({0, 2}, 
-                torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-            torch::Tensor gsCtrlPts          = torch::empty({0, 2}, 
-                torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-            torch::Tensor gsStresses         = torch::empty({0, 1}, 
-                torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+            torch::Tensor gsOriginCtrlPts;
+            torch::Tensor gsDisplacements;
+            torch::Tensor gsCtrlPts;
+            torch::Tensor gsStresses;
             
             nlohmann::json gsOriginCtrlPts_j = nlohmann::json::array();
             nlohmann::json gsDisplacements_j = nlohmann::json::array();
@@ -1412,14 +1393,10 @@ int main() {
             net.appendToJsonFile("gsStresses", gsStresses_j);
 
             if (RUN_GS_REF_SIM) {
-                torch::Tensor gsRefOriginCtrlPts    = torch::empty({0, 2}, 
-                    torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-                torch::Tensor gsRefCtrlPts          = torch::empty({0, 2}, 
-                    torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-                torch::Tensor gsRefDisplacements    = torch::empty({0, 2}, 
-                    torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-                torch::Tensor gsRefStresses         = torch::empty({0, 1}, 
-                    torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+                torch::Tensor gsRefOriginCtrlPts;
+                torch::Tensor gsRefCtrlPts;
+                torch::Tensor gsRefDisplacements;
+                torch::Tensor gsRefStresses;
 
                 nlohmann::json gsRefOriginCtrlPts_j = nlohmann::json::array();
                 nlohmann::json gsRefCtrlPts_j       = nlohmann::json::array();
