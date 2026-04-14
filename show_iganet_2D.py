@@ -40,75 +40,90 @@ def nr_ctrlpts_1d_from_flat(ctrlpts, key):
         raise ValueError(f"'{key}' has {n} control points; expected a perfect square for a 2D tensor grid.")
     return r
 
+
+def make_bspline_from_ctrlpts(control_points, degree, key):
+    nr_ctrl_pts = nr_ctrlpts_1d_from_flat(control_points, key)
+    kv = generate_knot_vector(degree, nr_ctrl_pts)
+    return splinepy.BSpline(
+        degrees=(degree, degree),
+        knot_vectors=kv,
+        control_points=control_points,
+    )
+
+
+def add_item(show_items, label, control_points, degree, key):
+    spline = make_bspline_from_ctrlpts(control_points, degree, key)
+    show_items.append([label, spline])
+    return spline
+
+
+def add_optional_item(show_items, data, key, label, degree_key="net_Degree"):
+    if has_key_nonempty(data, key):
+        degree = int(data.get(degree_key, data["net_Degree"]))
+        return add_item(show_items, label, as_ctrlpts(data, key), degree, key)
+    return None
+
+
+def is_multipatch_result(data):
+    return has_key_nonempty(data, "net_Patches") and (
+        has_key_nonempty(data, "net_patch0_CtrlPts") or has_key_nonempty(data, "net_patch1_CtrlPts")
+    )
+
+
+def make_multipatch_from_results(data, suffix):
+    patch_splines = []
+
+    for patch_id in range(2):
+        key = f"net_patch{patch_id}_{suffix}"
+        degree_key = f"net_patch{patch_id}_Degree"
+        if has_key_nonempty(data, key):
+            degree = int(data.get(degree_key, data["net_Degree"]))
+            patch_splines.append(
+                make_bspline_from_ctrlpts(as_ctrlpts(data, key), degree, key)
+            )
+
+    if not patch_splines:
+        return None
+
+    multipatch = splinepy.Multipatch(patch_splines)
+    multipatch.determine_interfaces()
+    return multipatch
+
 """ PREPARE DATA """
 
-import json
-import numpy as np
-import splinepy
+# import json
+# import numpy as np
+# import splinepy
 
 # read data
 with open("result.json", "r") as file:
     data = json.load(file)
 
 # degrees of the splines
-deg = data["net_Degree"]
+deg = int(data["net_Degree"])
 
 
 """ CREATE SPLINES """
 
 show_items = []
 
-# --- G+Smo original (optional)
-if has_key_nonempty(data, "gsOriginCtrlPts"):
-    control_points_gs_original = as_ctrlpts(data, "gsOriginCtrlPts")
-    nr_ctrl_pts_gs_original = nr_ctrlpts_1d_from_flat(control_points_gs_original, "gsOriginCtrlPts")
-    kv_gs_original = generate_knot_vector(deg, nr_ctrl_pts_gs_original)
+# --- G+Smo original/current (optional)
+add_optional_item(show_items, data, "gsOriginCtrlPts", "G+Smo Original Control Points")
+add_optional_item(show_items, data, "gsCtrlPts", "G+Smo Control Points")
 
-    BSpline_gs_original = splinepy.BSpline(
-        degrees=(deg, deg),
-        knot_vectors=kv_gs_original,
-        control_points=control_points_gs_original,
-    )
+# --- Standard Collocation (optional in multipatch mode)
+add_optional_item(show_items, data, "stdCollCtrlPts", "Collocation Control Points")
 
-    show_items.append(["G+Smo Original Control Points", BSpline_gs_original])
+if is_multipatch_result(data):
+    net_original_multipatch = make_multipatch_from_results(data, "OriginCtrlPts")
+    net_deformed_multipatch = make_multipatch_from_results(data, "CtrlPts")
 
-# --- G+Smo deformed/current (optional)
-if has_key_nonempty(data, "gsCtrlPts"):
-    control_points_gs = as_ctrlpts(data, "gsCtrlPts")
-    nr_ctrl_pts_gs = nr_ctrlpts_1d_from_flat(control_points_gs, "gsCtrlPts")
-    kv_gs = generate_knot_vector(deg, nr_ctrl_pts_gs)
-
-    BSpline_gs = splinepy.BSpline(
-        degrees=(deg, deg),
-        knot_vectors=kv_gs,
-        control_points=control_points_gs,
-    )
-
-    show_items.append(["G+Smo Control Points", BSpline_gs])
-
-# --- Standard Collocation
-control_points_stdColl = as_ctrlpts(data, "stdCollCtrlPts")
-nr_ctrl_pts_stdColl = nr_ctrlpts_1d_from_flat(control_points_stdColl, "stdCollCtrlPts")
-kv_coll = generate_knot_vector(deg, nr_ctrl_pts_stdColl)
-
-BSpline_coll = splinepy.BSpline(
-    degrees=(deg, deg),
-    knot_vectors=kv_coll,
-    control_points=control_points_stdColl,
-)
-show_items.append(["Collocation Control Points", BSpline_coll])
-
-# --- Net
-control_points_net = as_ctrlpts(data, "net_CtrlPts")
-nr_ctrl_pts_net = nr_ctrlpts_1d_from_flat(control_points_net, "net_CtrlPts")
-kv_net = generate_knot_vector(deg, nr_ctrl_pts_net)
-
-BSpline_net = splinepy.BSpline(
-    degrees=(deg, deg),
-    knot_vectors=kv_net,
-    control_points=control_points_net,
-)
-show_items.append(["IgANet Control Points", BSpline_net])
+    if net_original_multipatch is not None:
+        show_items.append(["IgANet Original Multipatch", net_original_multipatch])
+    if net_deformed_multipatch is not None:
+        show_items.append(["IgANet Deformed Multipatch", net_deformed_multipatch])
+else:
+    add_optional_item(show_items, data, "net_CtrlPts", "IgANet Control Points")
 
 # show whatever exists
 gus.show(
@@ -743,4 +758,3 @@ if write:
                             BSpline_net_poisson,
                             **get_svg_kwargs(0.0, 0.25)
                             )
-

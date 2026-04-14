@@ -4,3 +4,4 @@ build/
 result.json
 std_collocation_python/__pycache__/
 .codex
+result_weak_multipatch_long_training.json

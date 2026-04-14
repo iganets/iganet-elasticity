@@ -8,6 +8,141 @@ using namespace iganet::literals;
 using iganet_elasticity::utils::paths::repo_root_from_build_exe;
 using iganet_elasticity::utils::config::require;
 
+namespace {
+
+struct SideVectorBoundaryCondition {
+    int side;
+    double x;
+    double y;
+};
+
+struct PatchBoundaryConditions {
+    std::vector<SideVectorBoundaryCondition> diri_sides;
+    std::vector<SideVectorBoundaryCondition> force_sides;
+    std::vector<int> tfbc_sides;
+};
+
+struct PatchConfig {
+    int id;
+    int64_t nr_ctrl_pts;
+    PatchBoundaryConditions boundary_conditions;
+};
+
+struct PatchInterfaceConfig {
+    int patch_a;
+    int side_a;
+    int patch_b;
+    int side_b;
+    std::string orientation;
+};
+
+PatchBoundaryConditions parse_patch_boundary_conditions(const nlohmann::json& bc_json) {
+    PatchBoundaryConditions bc;
+
+    for (const auto& dsj : require(bc_json, "diri_sides")) {
+        bc.diri_sides.push_back({
+            dsj.at(0).get<int>(),
+            dsj.at(1).get<double>(),
+            dsj.at(2).get<double>()
+        });
+    }
+
+    for (const auto& fsj : require(bc_json, "force_sides")) {
+        bc.force_sides.push_back({
+            fsj.at(0).get<int>(),
+            fsj.at(1).get<double>(),
+            fsj.at(2).get<double>()
+        });
+    }
+
+    bc.tfbc_sides = require(bc_json, "tfbc_sides").get<std::vector<int>>();
+    return bc;
+}
+
+std::vector<PatchConfig> parse_patch_configs(const nlohmann::json& j, int64_t default_nr_ctrl_pts) {
+    std::vector<PatchConfig> patches;
+
+    if (!j.contains("patches")) {
+        PatchConfig patch;
+        patch.id = 0;
+        patch.nr_ctrl_pts = default_nr_ctrl_pts;
+        patch.boundary_conditions = parse_patch_boundary_conditions(require(j, "boundary_conditions"));
+        patches.push_back(std::move(patch));
+        return patches;
+    }
+
+    for (const auto& patch_json : require(j, "patches")) {
+        PatchConfig patch;
+        patch.id = require(patch_json, "id").get<int>();
+        patch.nr_ctrl_pts = patch_json.contains("spline")
+            ? require(patch_json, "spline.nr_ctrl_pts").get<int64_t>()
+            : default_nr_ctrl_pts;
+        patch.boundary_conditions = parse_patch_boundary_conditions(
+            require(patch_json, "boundary_conditions"));
+        patches.push_back(std::move(patch));
+    }
+
+    return patches;
+}
+
+std::vector<PatchInterfaceConfig> parse_patch_interfaces(const nlohmann::json& j) {
+    std::vector<PatchInterfaceConfig> interfaces;
+
+    if (!j.contains("interfaces")) {
+        return interfaces;
+    }
+
+    for (const auto& interface_json : require(j, "interfaces")) {
+        interfaces.push_back({
+            require(interface_json, "patch_a").get<int>(),
+            require(interface_json, "side_a").get<int>(),
+            require(interface_json, "patch_b").get<int>(),
+            require(interface_json, "side_b").get<int>(),
+            interface_json.value("orientation", "aligned")
+        });
+    }
+
+    return interfaces;
+}
+
+void append_json_key(const std::string& jsonPath, const std::string& key, const nlohmann::json& data) {
+    nlohmann::json jsonData;
+
+    try {
+        std::ifstream json_file_in(jsonPath);
+        if (json_file_in.is_open()) {
+            json_file_in >> jsonData;
+            json_file_in.close();
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error reading JSON file: " << jsonPath
+                  << ". Exception: " << e.what() << "\n";
+    }
+
+    try {
+        jsonData[key] = data;
+    } catch (const std::exception& e) {
+        std::cerr << "Error adding key to JSON object: " << e.what() << "\n";
+        return;
+    }
+
+    try {
+        std::ofstream json_file_out(jsonPath);
+        if (json_file_out.is_open()) {
+            json_file_out << jsonData.dump(1);
+            json_file_out.close();
+        } else {
+            std::cerr << "Error: Could not open file for writing: "
+                      << jsonPath << "\n";
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error writing JSON file: " << jsonPath
+                  << ". Exception: " << e.what() << "\n";
+    }
+}
+
+} // namespace
+
 /// @brief Specialization of the IgANet class for linear elasticity in 2D
 template <typename Optimizer, typename GeometryMap, typename Variable>
 class linear_elasticity
@@ -137,47 +272,7 @@ public:
     
     /// @brief Writes data to a JSON file
     void appendToJsonFile(const std::string& key, const nlohmann::json& data) {
-    
-        // create json object
-        nlohmann::json jsonData;
-
-        // try to read the JSON data from the file
-        try {
-            std::ifstream json_file_in(JSON_PATH_);
-            if (json_file_in.is_open()) {
-                json_file_in >> jsonData;
-                json_file_in.close();
-            } else {
-                std::cerr << "Warning: Could not open file for reading: " 
-                        << JSON_PATH_ << "\n";
-            }
-        } catch (const std::exception& e) {
-            std::cerr << "Error reading JSON file: " << JSON_PATH_ 
-                    << ". Exception: " << e.what() << "\n";
-        }
-
-        // add new data to the JSON object
-        try {
-            jsonData[key] = data;
-        } catch (const std::exception& e) {
-            std::cerr << "Error adding key to JSON object: " << e.what() << "\n";
-            return;
-        }
-
-        // write the JSON data to the file
-        try {
-            std::ofstream json_file_out(JSON_PATH_);
-            if (json_file_out.is_open()) {
-                json_file_out << jsonData.dump(1);
-                json_file_out.close();
-            } else {
-                std::cerr << "Error: Could not open file for writing: " 
-                        << JSON_PATH_ << "\n";
-            }
-        } catch (const std::exception& e) {
-            std::cerr << "Error writing JSON file: " << JSON_PATH_ 
-                    << ". Exception: " << e.what() << "\n";
-        }
+        append_json_key(JSON_PATH_, key, data);
     }
 
     /// @brief helper function to load the std collocation displacements from a JSON file
@@ -387,8 +482,9 @@ public:
 
         // pre-allocation of the loss values
         torch::Tensor totalLoss; 
-        torch::Tensor elastLoss;
-        std::optional<torch::Tensor> bcLoss;
+        torch::Tensor lossPDE;
+        std::optional<torch::Tensor> lossBC;
+        std::optional<torch::Tensor> lossINTER;
         std::optional<torch::Tensor> tfbcLoss;
         std::optional<torch::Tensor> gsLoss;
         std::optional<torch::Tensor> forceLoss;
@@ -770,13 +866,16 @@ public:
 
             // calculation of the loss function for double-sided constraint solid
             // div(sigma) + f = 0 --> div(sigma) = -f
-            elastLoss = torch::mse_loss(divStress, bodyForce);
+            lossPDE = torch::mse_loss(divStress, bodyForce);
             
             // add the elasticity loss to the total loss
-            totalLoss = elastLoss;
+            totalLoss = lossPDE;
 
             // add the elasticity loss to the cmd-output variable
-            singleLossOutput << "EL " << std::setw(11) << elastLoss.item<double>();
+            singleLossOutput << "PDE " << std::setw(10) << lossPDE.item<double>();
+
+            lossINTER = torch::zeros({}, outputs.options());
+            totalLoss += *lossINTER;
 
             // only consider traction-free-bc (tfbc) loss if tfbcs are applied
             if (!TFBC_SIDES_.empty()) {
@@ -797,7 +896,7 @@ public:
                 // add a BC weight for penalization of the training
                 int bcWeight = 1e7;
                 // initialize bcLoss variable
-                bcLoss = torch::zeros({}, outputs.options());
+                lossBC = torch::zeros({}, outputs.options());
 
                 // evaluation of the displacements at the boundary points
                 auto u_bdr = this->template output<0>().template eval<iganet::functionspace::boundary>(collPts_.second);
@@ -810,22 +909,22 @@ public:
                     
                     switch (sideNr) {
                         case 1: 
-                            *bcLoss += bcWeight * 
+                            *lossBC += bcWeight * 
                                 (torch::mse_loss(*std::get<0>(u_bdr)[0], *std::get<0>(bdr)[0]) + 
                                 torch::mse_loss(*std::get<0>(u_bdr)[1], *std::get<0>(bdr)[1]));
                             break;
                         case 2:
-                            *bcLoss += bcWeight * 
+                            *lossBC += bcWeight * 
                                 (torch::mse_loss(*std::get<1>(u_bdr)[0], *std::get<1>(bdr)[0]) + 
                                 torch::mse_loss(*std::get<1>(u_bdr)[1], *std::get<1>(bdr)[1]));
                             break;
                         case 3:
-                            *bcLoss += bcWeight * 
+                            *lossBC += bcWeight * 
                                 (torch::mse_loss(*std::get<2>(u_bdr)[0], *std::get<2>(bdr)[0]) + 
                                 torch::mse_loss(*std::get<2>(u_bdr)[1], *std::get<2>(bdr)[1]));
                             break;
                         case 4:
-                            *bcLoss += bcWeight * 
+                            *lossBC += bcWeight * 
                                 (torch::mse_loss(*std::get<3>(u_bdr)[0], *std::get<3>(bdr)[0]) + 
                                 torch::mse_loss(*std::get<3>(u_bdr)[1], *std::get<3>(bdr)[1]));
                             break;
@@ -833,8 +932,8 @@ public:
                             std::cerr << "Error: Invalid side number for Dirichlet BC!" << std::endl;
                     }
                 }
-                totalLoss += *bcLoss;
-                singleLossOutput << " + BL " << std::setw(11) << (*bcLoss).item<double>() / bcWeight 
+                totalLoss += *lossBC;
+                singleLossOutput << " + BC " << std::setw(11) << (*lossBC).item<double>() / bcWeight 
                                 << " * 1e" << static_cast<int>(std::log10(bcWeight));
             }
 
@@ -866,14 +965,17 @@ public:
 
             // calculation of the loss function for double-sided constraint solid
             // div(sigma) + f = 0 --> div(sigma) = -f
-            elastLoss = torch::mse_loss(divStress, bodyForce);
+            lossPDE = torch::mse_loss(divStress, bodyForce);
 
             // add the elasticity loss and supervised loss to the total loss
-            totalLoss = *gsLoss + elastLoss;
+            totalLoss = *gsLoss + lossPDE;
 
             // add the elasticity and supervised losses to the cmd-output variable
             singleLossOutput << "GL " << std::setw(11) << (*gsLoss).item<double>()
-                            << " + EL " << std::setw(11) << elastLoss.item<double>();
+                            << " + PDE " << std::setw(10) << lossPDE.item<double>();
+
+            lossINTER = torch::zeros({}, outputs.options());
+            totalLoss += *lossINTER;
 
             // only consider traction-free-bc (tfbc) loss if tfbcs are applied
             if (!TFBC_SIDES_.empty()) {
@@ -894,7 +996,7 @@ public:
                 // add a BC weight for penalization of the training
                 int bcWeight = 1e0;
                 // initialize bcLoss variable
-                bcLoss = torch::zeros({}, outputs.options());
+                lossBC = torch::zeros({}, outputs.options());
 
                 // evaluation of the displacements at the boundary points
                 auto u_bdr = this->template output<0>().template eval<iganet::functionspace::boundary>(collPts_.second);
@@ -907,22 +1009,22 @@ public:
 
                     switch (sideNr) {
                         case 1:
-                            *bcLoss += bcWeight * 
+                            *lossBC += bcWeight * 
                                 (torch::mse_loss(*std::get<0>(u_bdr)[0], *std::get<0>(bdr)[0]) + 
                                 torch::mse_loss(*std::get<0>(u_bdr)[1], *std::get<0>(bdr)[1]));
                             break;
                         case 2:
-                            *bcLoss += bcWeight * 
+                            *lossBC += bcWeight * 
                                 (torch::mse_loss(*std::get<1>(u_bdr)[0], *std::get<1>(bdr)[0]) + 
                                 torch::mse_loss(*std::get<1>(u_bdr)[1], *std::get<1>(bdr)[1]));
                             break;
                         case 3:
-                            *bcLoss += bcWeight * 
+                            *lossBC += bcWeight * 
                                 (torch::mse_loss(*std::get<2>(u_bdr)[0], *std::get<2>(bdr)[0]) + 
                                 torch::mse_loss(*std::get<2>(u_bdr)[1], *std::get<2>(bdr)[1]));
                             break;
                         case 4:
-                            *bcLoss += bcWeight * 
+                            *lossBC += bcWeight * 
                                 (torch::mse_loss(*std::get<3>(u_bdr)[0], *std::get<3>(bdr)[0]) + 
                                 torch::mse_loss(*std::get<3>(u_bdr)[1], *std::get<3>(bdr)[1]));
                             break;
@@ -930,8 +1032,8 @@ public:
                             std::cerr << "Error: Invalid side number for Dirichlet BC!" << std::endl;
                     }
                 }
-                totalLoss += *bcLoss;
-                singleLossOutput << " + BL " << std::setw(11) << (*bcLoss).item<double>() / bcWeight 
+                totalLoss += *lossBC;
+                singleLossOutput << " + BC " << std::setw(11) << (*lossBC).item<double>() / bcWeight 
                                 << " * 1e" << static_cast<int>(std::log10(bcWeight));
             }
 
@@ -1044,6 +1146,597 @@ public:
     }
 };
 
+/// @brief Experimental 2-patch variant with weak interface coupling
+template <typename Optimizer, typename GeometryMap, typename Variable>
+class linear_elasticity_2patch
+    : public iganet::IgANet<Optimizer, std::tuple<GeometryMap, GeometryMap>,
+                            std::tuple<Variable, Variable>>,
+      public iganet::IgANetCustomizable<std::tuple<GeometryMap, GeometryMap>,
+                                        std::tuple<Variable, Variable>>
+{
+private:
+    using Inputs = std::tuple<GeometryMap, GeometryMap>;
+    using Outputs = std::tuple<Variable, Variable>;
+
+    using Base = iganet::IgANet<Optimizer, Inputs, Outputs>;
+    using Customizable = iganet::IgANetCustomizable<Inputs, Outputs>;
+
+    struct PatchCache {
+        typename Base::template collPts_t<0> collPts;
+        typename Base::template collPts_t<0> interiorCollPts;
+
+        typename Customizable::template output_interior_knot_indices_t<0> var_knot_indices;
+        typename Customizable::template output_interior_coeff_indices_t<0> var_coeff_indices;
+        typename Customizable::template output_interior_knot_indices_t<0> var_knot_indices_interior;
+        typename Customizable::template output_interior_coeff_indices_t<0> var_coeff_indices_interior;
+        typename Customizable::template input_interior_knot_indices_t<0> G_knot_indices;
+        typename Customizable::template input_interior_coeff_indices_t<0> G_coeff_indices;
+        typename Customizable::template input_interior_knot_indices_t<0> G_knot_indices_interior;
+        typename Customizable::template input_interior_coeff_indices_t<0> G_coeff_indices_interior;
+        int nrCollPts = 0;
+    };
+
+    static std::tuple<Variable, Variable> make_reference_tuple(
+        const std::array<PatchConfig, 2>& patches) {
+        return std::make_tuple(
+            Variable(iganet::utils::to_array(
+                patches[0].nr_ctrl_pts, patches[0].nr_ctrl_pts)),
+            Variable(iganet::utils::to_array(
+                patches[1].nr_ctrl_pts, patches[1].nr_ctrl_pts)));
+    }
+
+    template <std::size_t Patch>
+    auto& patch_output() { return this->template output<Patch>(); }
+
+    template <std::size_t Patch>
+    auto& patch_input() { return this->template input<Patch>(); }
+
+    template <std::size_t Patch>
+    auto& patch_ref() { return std::get<Patch>(ref_); }
+
+    template <std::size_t Patch>
+    auto const& patch_ref() const { return std::get<Patch>(ref_); }
+
+    template <std::size_t Patch>
+    auto& patch_cache() { return patchCaches_[Patch]; }
+
+    template <std::size_t Patch>
+    auto const& patch_cache() const { return patchCaches_[Patch]; }
+
+    static std::vector<int> collect_occupied_sides(
+        const PatchBoundaryConditions& bc, bool include_tfbc = false) {
+        std::vector<int> occupied;
+        for (const auto& side : bc.diri_sides) occupied.push_back(side.side);
+        for (const auto& side : bc.force_sides) occupied.push_back(side.side);
+        if (include_tfbc) {
+            occupied.insert(occupied.end(), bc.tfbc_sides.begin(), bc.tfbc_sides.end());
+        }
+        return occupied;
+    }
+
+    static bool has_side(const std::vector<int>& sides, int side) {
+        return std::find(sides.begin(), sides.end(), side) != sides.end();
+    }
+
+    template <std::size_t Patch>
+    std::array<torch::Tensor, 2> build_side_collocation_points(
+        int side, bool trimCorners, bool reverseDirection = false,
+        bool refinedInterface = false) const {
+        const auto& cache = patch_cache<Patch>();
+        const auto& boundaryCollPts = cache.collPts.second;
+        const auto collPts1D = std::get<0>(boundaryCollPts)[0];
+        int64_t begin = 0;
+        int64_t end = collPts1D.size(0);
+
+        if (trimCorners) {
+            const auto occupied = collect_occupied_sides(
+                patches_[Patch].boundary_conditions,
+                /* include_tfbc = */ refinedInterface);
+            switch (side) {
+                case 1:
+                case 2:
+                    if (has_side(occupied, 3)) begin += 1;
+                    if (has_side(occupied, 4)) end -= 1;
+                    break;
+                case 3:
+                case 4:
+                    if (has_side(occupied, 1)) begin += 1;
+                    if (has_side(occupied, 2)) end -= 1;
+                    break;
+                default:
+                    throw std::invalid_argument("Side must be 1, 2, 3 or 4.");
+            }
+        }
+
+        auto line = collPts1D.slice(0, begin, end);
+        if (reverseDirection) {
+            line = torch::flip(line, {0});
+        }
+
+        switch (side) {
+            case 1:
+                return {torch::zeros({line.size(0)}, line.options()), line};
+            case 2:
+                return {torch::ones({line.size(0)}, line.options()), line};
+            case 3:
+                return {line, torch::zeros({line.size(0)}, line.options())};
+            case 4:
+                return {line, torch::ones({line.size(0)}, line.options())};
+            default:
+                throw std::invalid_argument("Side must be 1, 2, 3 or 4.");
+        }
+    }
+
+    template <std::size_t Patch>
+    torch::Tensor displacement_tensor(const std::array<torch::Tensor, 2>& evalPts) {
+        auto disp = patch_output<Patch>().eval(evalPts);
+        return torch::stack({*disp[0], *disp[1]}, 1);
+    }
+
+    template <std::size_t Patch>
+    torch::Tensor traction_tensor(int side, const std::array<torch::Tensor, 2>& evalPts) {
+        auto varKnot =
+            patch_output<Patch>().template find_knot_indices<iganet::functionspace::interior>(evalPts);
+        auto varCoeff =
+            patch_output<Patch>().template find_coeff_indices<iganet::functionspace::interior>(varKnot);
+        auto geoKnot =
+            patch_input<Patch>().template find_knot_indices<iganet::functionspace::interior>(evalPts);
+        auto geoCoeff =
+            patch_input<Patch>().template find_coeff_indices<iganet::functionspace::interior>(geoKnot);
+
+        auto jacobianBoundary = patch_output<Patch>().ijac(
+            patch_input<Patch>(), evalPts, varKnot, varCoeff, geoKnot, geoCoeff);
+
+        auto ux_x = *jacobianBoundary[0];
+        auto ux_y = *jacobianBoundary[1];
+        auto uy_x = *jacobianBoundary[2];
+        auto uy_y = *jacobianBoundary[3];
+
+        auto tx = torch::zeros({evalPts[0].size(0)}, ux_x.options());
+        auto ty = torch::zeros({evalPts[0].size(0)}, ux_x.options());
+
+        switch (side) {
+            case 1:
+                tx = -lambda_ * (ux_x + uy_y) - 2 * mu_ * ux_x;
+                ty = -mu_ * (uy_x + ux_y);
+                break;
+            case 2:
+                tx = lambda_ * (ux_x + uy_y) + 2 * mu_ * ux_x;
+                ty = mu_ * (uy_x + ux_y);
+                break;
+            case 3:
+                tx = -mu_ * (uy_x + ux_y);
+                ty = -lambda_ * (ux_x + uy_y) - 2 * mu_ * uy_y;
+                break;
+            case 4:
+                tx = mu_ * (uy_x + ux_y);
+                ty = lambda_ * (ux_x + uy_y) + 2 * mu_ * uy_y;
+                break;
+            default:
+                throw std::invalid_argument("Side must be 1, 2, 3 or 4.");
+        }
+
+        return torch::stack({tx, ty}, 1);
+    }
+
+    template <std::size_t Patch>
+    torch::Tensor compute_patch_pde_loss() {
+        auto& cache = patch_cache<Patch>();
+        auto hessianColl = patch_output<Patch>().ihess(
+            patch_input<Patch>(), cache.interiorCollPts.first,
+            cache.var_knot_indices_interior, cache.var_coeff_indices_interior,
+            cache.G_knot_indices_interior, cache.G_coeff_indices_interior);
+
+        auto& ux_xx = hessianColl(0,0,0);
+        auto& ux_xy = hessianColl(0,1,0);
+        auto& ux_yy = hessianColl(1,1,0);
+        auto& uy_xx = hessianColl(0,0,1);
+        auto& uy_xy = hessianColl(0,1,1);
+        auto& uy_yy = hessianColl(1,1,1);
+
+        torch::Tensor divStressX = (lambda_ + 2 * mu_) * ux_xx
+                                 + mu_ * ux_yy
+                                 + (lambda_ + mu_) * uy_xy;
+        torch::Tensor divStressY = mu_ * uy_xx
+                                 + (lambda_ + 2 * mu_) * uy_yy
+                                 + (lambda_ + mu_) * ux_xy;
+
+        torch::Tensor divStress = torch::stack({divStressX, divStressY}, 1);
+        torch::Tensor bodyForce = torch::tensor(
+            {BODY_FORCE_.first, BODY_FORCE_.second},
+            divStress.options()).view({1, 2}).repeat({divStress.size(0), 1});
+
+        return torch::mse_loss(divStress, bodyForce);
+    }
+
+    template <std::size_t Patch>
+    torch::Tensor compute_patch_bc_loss(const torch::TensorOptions& opts) {
+        const auto& bc = patches_[Patch].boundary_conditions;
+        auto lossBC = torch::zeros({}, opts);
+
+        if (!bc.diri_sides.empty()) {
+            const int bcWeight = 1e7;
+            auto u_bdr = patch_output<Patch>().template eval<iganet::functionspace::boundary>(
+                patch_cache<Patch>().collPts.second);
+            auto bdr = patch_ref<Patch>().template eval<iganet::functionspace::boundary>(
+                patch_cache<Patch>().collPts.second);
+
+            for (const auto& side : bc.diri_sides) {
+                switch (side.side) {
+                    case 1:
+                        lossBC += bcWeight * (torch::mse_loss(*std::get<0>(u_bdr)[0], *std::get<0>(bdr)[0]) +
+                                              torch::mse_loss(*std::get<0>(u_bdr)[1], *std::get<0>(bdr)[1]));
+                        break;
+                    case 2:
+                        lossBC += bcWeight * (torch::mse_loss(*std::get<1>(u_bdr)[0], *std::get<1>(bdr)[0]) +
+                                              torch::mse_loss(*std::get<1>(u_bdr)[1], *std::get<1>(bdr)[1]));
+                        break;
+                    case 3:
+                        lossBC += bcWeight * (torch::mse_loss(*std::get<2>(u_bdr)[0], *std::get<2>(bdr)[0]) +
+                                              torch::mse_loss(*std::get<2>(u_bdr)[1], *std::get<2>(bdr)[1]));
+                        break;
+                    case 4:
+                        lossBC += bcWeight * (torch::mse_loss(*std::get<3>(u_bdr)[0], *std::get<3>(bdr)[0]) +
+                                              torch::mse_loss(*std::get<3>(u_bdr)[1], *std::get<3>(bdr)[1]));
+                        break;
+                    default:
+                        throw std::invalid_argument("Invalid Dirichlet side.");
+                }
+            }
+        }
+
+        for (int side : bc.tfbc_sides) {
+            auto sidePts = build_side_collocation_points<Patch>(side, true);
+            auto traction = traction_tensor<Patch>(side, sidePts);
+            lossBC += torch::mse_loss(traction, torch::zeros_like(traction));
+        }
+
+        for (const auto& force : bc.force_sides) {
+            auto sidePts = build_side_collocation_points<Patch>(force.side, true);
+            auto traction = traction_tensor<Patch>(force.side, sidePts);
+            auto target = torch::zeros_like(traction);
+            target.slice(1, 0, 1).fill_(force.x);
+            target.slice(1, 1, 2).fill_(force.y);
+            lossBC += torch::mse_loss(traction, target);
+        }
+
+        return lossBC;
+    }
+
+    torch::Tensor compute_interface_loss(const torch::TensorOptions& opts) {
+        auto lossINTER = torch::zeros({}, opts);
+
+        for (const auto& interfaceCfg : interfaces_) {
+            if (!((interfaceCfg.patch_a == 0 && interfaceCfg.patch_b == 1) ||
+                  (interfaceCfg.patch_a == 1 && interfaceCfg.patch_b == 0))) {
+                throw std::runtime_error("2-patch prototype currently expects interfaces between patch 0 and 1.");
+            }
+
+            const bool reverse = interfaceCfg.orientation == "reversed";
+
+            if (interfaceCfg.patch_a == 0 && interfaceCfg.patch_b == 1) {
+                auto sideA = build_side_collocation_points<0>(interfaceCfg.side_a, true, false, true);
+                auto sideB = build_side_collocation_points<1>(interfaceCfg.side_b, true, reverse, true);
+                auto dispA = displacement_tensor<0>(sideA);
+                auto dispB = displacement_tensor<1>(sideB);
+                lossINTER += INTERFACE_DISPLACEMENT_WEIGHT_ * torch::mse_loss(dispA, dispB);
+                auto tracA = traction_tensor<0>(interfaceCfg.side_a, sideA);
+                auto tracB = traction_tensor<1>(interfaceCfg.side_b, sideB);
+                lossINTER += INTERFACE_TRACTION_WEIGHT_ *
+                             torch::mse_loss(tracA + tracB, torch::zeros_like(tracA));
+            } else {
+                auto sideA = build_side_collocation_points<1>(interfaceCfg.side_a, true, false, true);
+                auto sideB = build_side_collocation_points<0>(interfaceCfg.side_b, true, reverse, true);
+                auto dispA = displacement_tensor<1>(sideA);
+                auto dispB = displacement_tensor<0>(sideB);
+                lossINTER += INTERFACE_DISPLACEMENT_WEIGHT_ * torch::mse_loss(dispA, dispB);
+                auto tracA = traction_tensor<1>(interfaceCfg.side_a, sideA);
+                auto tracB = traction_tensor<0>(interfaceCfg.side_b, sideB);
+                lossINTER += INTERFACE_TRACTION_WEIGHT_ *
+                             torch::mse_loss(tracA + tracB, torch::zeros_like(tracA));
+            }
+        }
+
+        return lossINTER;
+    }
+
+    void assign_outputs_from_tensor(const torch::Tensor& outputs) {
+        const auto patch0Size = patch_output<0>().as_tensor().size(0);
+        const auto patch1Size = patch_output<1>().as_tensor().size(0);
+        patch_output<0>().from_tensor(outputs.slice(0, 0, patch0Size));
+        patch_output<1>().from_tensor(outputs.slice(0, patch0Size, patch0Size + patch1Size));
+    }
+
+    template <std::size_t Patch>
+    void initialize_patch_data() {
+        auto& cache = patch_cache<Patch>();
+        cache.collPts = Base::template collPts<Patch>(iganet::collPts::greville);
+        cache.interiorCollPts = Base::template collPts<Patch>(iganet::collPts::greville_interior);
+
+        cache.nrCollPts = static_cast<int>(std::sqrt(std::get<0>(cache.collPts.first).size(0)));
+        cache.var_knot_indices =
+            patch_output<Patch>().template find_knot_indices<iganet::functionspace::interior>(
+                cache.collPts.first);
+        cache.var_coeff_indices =
+            patch_output<Patch>().template find_coeff_indices<iganet::functionspace::interior>(
+                cache.var_knot_indices);
+        cache.var_knot_indices_interior =
+            patch_output<Patch>().template find_knot_indices<iganet::functionspace::interior>(
+                cache.interiorCollPts.first);
+        cache.var_coeff_indices_interior =
+            patch_output<Patch>().template find_coeff_indices<iganet::functionspace::interior>(
+                cache.var_knot_indices_interior);
+        cache.G_knot_indices =
+            patch_input<Patch>().template find_knot_indices<iganet::functionspace::interior>(
+                cache.collPts.first);
+        cache.G_coeff_indices =
+            patch_input<Patch>().template find_coeff_indices<iganet::functionspace::interior>(
+                cache.G_knot_indices);
+        cache.G_knot_indices_interior =
+            patch_input<Patch>().template find_knot_indices<iganet::functionspace::interior>(
+                cache.interiorCollPts.first);
+        cache.G_coeff_indices_interior =
+            patch_input<Patch>().template find_coeff_indices<iganet::functionspace::interior>(
+                cache.G_knot_indices_interior);
+    }
+
+    void appendToJsonFile(const std::string& key, const nlohmann::json& data) {
+        append_json_key(JSON_PATH_, key, data);
+    }
+
+    template <std::size_t Patch>
+    void export_patch_results(const std::string& suffix) {
+        auto& cache = patch_cache<Patch>();
+        auto jacobian = patch_output<Patch>().ijac(
+            patch_input<Patch>(), cache.collPts.first,
+            cache.var_knot_indices, cache.var_coeff_indices,
+            cache.G_knot_indices, cache.G_coeff_indices);
+
+        auto ux_x = *jacobian[0];
+        auto ux_y = *jacobian[1];
+        auto uy_x = *jacobian[2];
+        auto uy_y = *jacobian[3];
+
+        auto __jac_opts = jacobian[0]->options();
+        torch::Tensor sigma_xx = torch::zeros({jacobian[0]->size(0)}, __jac_opts);
+        torch::Tensor sigma_xy = torch::zeros({jacobian[0]->size(0)}, __jac_opts);
+        torch::Tensor sigma_yy = torch::zeros({jacobian[0]->size(0)}, __jac_opts);
+        torch::Tensor sigma_vm = torch::zeros({jacobian[0]->size(0)}, __jac_opts);
+
+        nlohmann::json vm_j = nlohmann::json::array();
+        nlohmann::json x_j = nlohmann::json::array();
+        nlohmann::json y_j = nlohmann::json::array();
+
+        for (int i = 0; i < jacobian[0]->size(0); ++i) {
+            sigma_xx[i] = lambda_ * (ux_x[i] + uy_y[i]) + 2 * mu_ * ux_x[i];
+            sigma_xy[i] = mu_ * (uy_x[i] + ux_y[i]);
+            sigma_yy[i] = lambda_ * (ux_x[i] + uy_y[i]) + 2 * mu_ * uy_y[i];
+            sigma_vm[i] = sqrt(sigma_xx[i] * sigma_xx[i] + sigma_yy[i] * sigma_yy[i]
+                               - sigma_xx[i] * sigma_yy[i] + 3 * sigma_xy[i] * sigma_xy[i]);
+            vm_j.push_back({sigma_vm[i].template item<double>()});
+            x_j.push_back({sigma_xx[i].template item<double>()});
+            y_j.push_back({sigma_yy[i].template item<double>()});
+        }
+
+        auto collPtsFirstAsTensor = torch::stack(
+            {std::get<0>(cache.collPts.first), std::get<1>(cache.collPts.first)}, 1);
+        auto displacementOfCollPts = patch_output<Patch>().eval(cache.collPts.first);
+        auto displacementAsTensor = torch::stack(
+            {*(displacementOfCollPts[0]), *(displacementOfCollPts[1])}, 1);
+
+        nlohmann::json collPts_j = nlohmann::json::array();
+        nlohmann::json collPtsDisp_j = nlohmann::json::array();
+        for (int i = 0; i < collPtsFirstAsTensor.size(0); ++i) {
+            collPts_j.push_back({
+                collPtsFirstAsTensor[i][0].template item<double>(),
+                collPtsFirstAsTensor[i][1].template item<double>()
+            });
+            collPtsDisp_j.push_back({
+                (collPtsFirstAsTensor[i][0] + displacementAsTensor[i][0]).template item<double>(),
+                (collPtsFirstAsTensor[i][1] + displacementAsTensor[i][1]).template item<double>()
+            });
+        }
+
+        auto hessianColl = patch_output<Patch>().ihess(
+            patch_input<Patch>(), cache.interiorCollPts.first,
+            cache.var_knot_indices_interior, cache.var_coeff_indices_interior,
+            cache.G_knot_indices_interior, cache.G_coeff_indices_interior);
+
+        auto& ux_xx = hessianColl(0,0,0);
+        auto& ux_xy = hessianColl(0,1,0);
+        auto& ux_yy = hessianColl(1,1,0);
+        auto& uy_xx = hessianColl(0,0,1);
+        auto& uy_xy = hessianColl(0,1,1);
+        auto& uy_yy = hessianColl(1,1,1);
+
+        torch::Tensor divStressX = (lambda_ + 2 * mu_) * ux_xx
+                                 + mu_ * ux_yy
+                                 + (lambda_ + mu_) * uy_xy;
+        torch::Tensor divStressY = mu_ * uy_xx
+                                 + (lambda_ + 2 * mu_) * uy_yy
+                                 + (lambda_ + mu_) * ux_xy;
+
+        nlohmann::json divX_j = nlohmann::json::array();
+        nlohmann::json divY_j = nlohmann::json::array();
+        for (int i = 0; i < divStressX.size(0); ++i) {
+            divX_j.push_back({divStressX[i].template item<double>()});
+            divY_j.push_back({divStressY[i].template item<double>()});
+        }
+
+        const int64_t nrCtrlPts = patches_[Patch].nr_ctrl_pts;
+        auto geometryAsTensor = patch_input<Patch>().as_tensor();
+        auto displacementTensor = patch_output<Patch>().as_tensor();
+        auto netCtrlPts = torch::zeros({nrCtrlPts * nrCtrlPts, 2}, geometryAsTensor.options());
+        auto netDisplacements = torch::zeros({nrCtrlPts * nrCtrlPts, 2}, displacementTensor.options());
+
+        for (int i = 0; i < nrCtrlPts * nrCtrlPts; ++i) {
+            netCtrlPts[i][0] = geometryAsTensor[i];
+            netCtrlPts[i][1] = geometryAsTensor[i + nrCtrlPts * nrCtrlPts];
+            netDisplacements[i][0] = displacementTensor[i];
+            netDisplacements[i][1] = displacementTensor[i + nrCtrlPts * nrCtrlPts];
+        }
+
+        auto displacedNetCtrlPts = netCtrlPts + netDisplacements;
+        nlohmann::json ctrlPts_j = nlohmann::json::array();
+        nlohmann::json originCtrlPts_j = nlohmann::json::array();
+        nlohmann::json dispCtrlPts_j = nlohmann::json::array();
+        for (int i = 0; i < displacedNetCtrlPts.size(0); ++i) {
+            originCtrlPts_j.push_back({
+                netCtrlPts[i][0].template item<double>(),
+                netCtrlPts[i][1].template item<double>()
+            });
+            dispCtrlPts_j.push_back({
+                netDisplacements[i][0].template item<double>(),
+                netDisplacements[i][1].template item<double>()
+            });
+            ctrlPts_j.push_back({
+                displacedNetCtrlPts[i][0].template item<double>(),
+                displacedNetCtrlPts[i][1].template item<double>()
+            });
+        }
+
+        appendToJsonFile("net_" + suffix + "_VmStresses", vm_j);
+        appendToJsonFile("net_" + suffix + "_XStresses", x_j);
+        appendToJsonFile("net_" + suffix + "_YStresses", y_j);
+        appendToJsonFile("net_" + suffix + "_collPtsFirstAsTensor", collPts_j);
+        appendToJsonFile("net_" + suffix + "_collPtsFirstAfterDisplacementAsTensor", collPtsDisp_j);
+        appendToJsonFile("net_" + suffix + "_DivergenceX", divX_j);
+        appendToJsonFile("net_" + suffix + "_DivergenceY", divY_j);
+        appendToJsonFile("net_" + suffix + "_OriginCtrlPts", originCtrlPts_j);
+        appendToJsonFile("net_" + suffix + "_Displacements", dispCtrlPts_j);
+        appendToJsonFile("net_" + suffix + "_CtrlPts", ctrlPts_j);
+        appendToJsonFile("net_" + suffix + "_Degree", DEGREE_);
+    }
+
+    template <std::size_t Patch>
+    void append_patch_ctrl_data(nlohmann::json& origin, nlohmann::json& disp, nlohmann::json& ctrl) {
+        const int64_t nrCtrlPts = patches_[Patch].nr_ctrl_pts;
+        auto geometryAsTensor = patch_input<Patch>().as_tensor();
+        auto displacementTensor = patch_output<Patch>().as_tensor();
+
+        for (int i = 0; i < nrCtrlPts * nrCtrlPts; ++i) {
+            const double x = geometryAsTensor[i].template item<double>();
+            const double y = geometryAsTensor[i + nrCtrlPts * nrCtrlPts].template item<double>();
+            const double ux = displacementTensor[i].template item<double>();
+            const double uy = displacementTensor[i + nrCtrlPts * nrCtrlPts].template item<double>();
+
+            origin.push_back({x, y});
+            disp.push_back({ux, uy});
+            ctrl.push_back({x + ux, y + uy});
+        }
+    }
+
+    double lambda_;
+    double mu_;
+    std::array<PatchConfig, 2> patches_;
+    std::vector<PatchInterfaceConfig> interfaces_;
+    std::array<PatchCache, 2> patchCaches_;
+    std::tuple<Variable, Variable> ref_;
+    int DEGREE_;
+    int MAX_EPOCH_;
+    double MIN_LOSS_;
+    std::string JSON_PATH_;
+    std::pair<double, double> BODY_FORCE_;
+    bool SUPERVISED_LEARNING_;
+    double INTERFACE_DISPLACEMENT_WEIGHT_ = 25.0;
+    double INTERFACE_TRACTION_WEIGHT_ = 5.0;
+
+public:
+    template <typename... Args>
+    linear_elasticity_2patch(double lambda, double mu, bool supervisedLearning,
+                             int degree, int maxEpoch, double minLoss,
+                             std::pair<double, double> bodyForce,
+                             std::vector<PatchConfig> patches,
+                             std::vector<PatchInterfaceConfig> interfaces,
+                             std::string jsonPath,
+                             std::vector<int64_t>&& layers,
+                             std::vector<std::vector<std::any>>&& activations,
+                             Args&&... args)
+        : Base(std::forward<std::vector<int64_t>>(layers),
+               std::forward<std::vector<std::vector<std::any>>>(activations),
+               std::forward<Args>(args)...),
+          lambda_(lambda),
+          mu_(mu),
+          patches_{patches.at(0), patches.at(1)},
+          interfaces_(std::move(interfaces)),
+          patchCaches_{},
+          ref_(make_reference_tuple(patches_)),
+          DEGREE_(degree),
+          MAX_EPOCH_(maxEpoch),
+          MIN_LOSS_(minLoss),
+          JSON_PATH_(std::move(jsonPath)),
+          BODY_FORCE_(bodyForce),
+          SUPERVISED_LEARNING_(supervisedLearning) {}
+
+    auto& ref0() { return std::get<0>(ref_); }
+    auto& ref1() { return std::get<1>(ref_); }
+
+    void initialize_problem_data() {
+        initialize_patch_data<0>();
+        initialize_patch_data<1>();
+    }
+
+    bool epoch(int64_t epoch) override {
+        std::cout << "Epoch: " << epoch << std::endl;
+        return epoch == 0;
+    }
+
+    torch::Tensor loss(const torch::Tensor& outputs, int64_t) override {
+        if (SUPERVISED_LEARNING_) {
+            throw std::runtime_error("Supervised learning is not yet implemented for the 2-patch prototype.");
+        }
+
+        assign_outputs_from_tensor(outputs);
+
+        auto lossPDE = compute_patch_pde_loss<0>() + compute_patch_pde_loss<1>();
+        auto lossBC = compute_patch_bc_loss<0>(outputs.options()) +
+                      compute_patch_bc_loss<1>(outputs.options());
+        auto lossINTER = compute_interface_loss(outputs.options());
+        auto totalLoss = lossPDE + lossBC + lossINTER;
+
+        std::cout << std::setw(11) << totalLoss.template item<double>()
+                  << " = PDE " << std::setw(10) << lossPDE.template item<double>()
+                  << " + BC " << std::setw(10) << lossBC.template item<double>()
+                  << " + INTER " << std::setw(10) << lossINTER.template item<double>()
+                  << std::endl;
+        return totalLoss;
+    }
+
+    void PostProc() {
+        export_patch_results<0>("patch0");
+        export_patch_results<1>("patch1");
+
+        nlohmann::json allOrigin = nlohmann::json::array();
+        nlohmann::json allDisp = nlohmann::json::array();
+        nlohmann::json allCtrl = nlohmann::json::array();
+        append_patch_ctrl_data<0>(allOrigin, allDisp, allCtrl);
+        append_patch_ctrl_data<1>(allOrigin, allDisp, allCtrl);
+
+        nlohmann::json patchIds = nlohmann::json::array();
+        for (const auto& patch : patches_) {
+            patchIds.push_back(patch.id);
+        }
+
+        nlohmann::json interfaces_j = nlohmann::json::array();
+        for (const auto& interfaceCfg : interfaces_) {
+            interfaces_j.push_back({
+                {"patch_a", interfaceCfg.patch_a},
+                {"side_a", interfaceCfg.side_a},
+                {"patch_b", interfaceCfg.patch_b},
+                {"side_b", interfaceCfg.side_b},
+                {"orientation", interfaceCfg.orientation}
+            });
+        }
+
+        appendToJsonFile("net_Patches", patchIds);
+        appendToJsonFile("net_Interfaces", interfaces_j);
+        appendToJsonFile("net_OriginCtrlPts", allOrigin);
+        appendToJsonFile("net_Displacements", allDisp);
+        appendToJsonFile("net_CtrlPts", allCtrl);
+        appendToJsonFile("net_Degree", DEGREE_);
+    }
+};
+
 int main() {
     iganet::init();
     iganet::verbose(std::cout);
@@ -1075,16 +1768,6 @@ int main() {
         return 1;
     }
 
-    // run standard collocation simulation with the parameters from the config file 
-    const std::string cmd =
-        "cd \"" + repo_root.string() + "\" && python3 run_std_coll.py";
-
-    const int ret = std::system(cmd.c_str());
-    if (ret != 0) {
-        std::cerr << "ERROR: python reference run (run_std_coll.py) failed. system() returned " << ret << "\n";
-        return 1;
-    }
-
     // material parameters
     double YOUNG_MODULUS = 0.0;
     double POISSON_RATIO = 0.0;
@@ -1109,6 +1792,8 @@ int main() {
     std::vector<std::tuple<int, double, double>> FORCE_SIDES;
     std::vector<std::tuple<int, double, double>> DIRI_SIDES;
     std::vector<int> TFBC_SIDES;
+    std::vector<PatchConfig> PATCHES;
+    std::vector<PatchInterfaceConfig> INTERFACES;
 
     // body force
     std::pair<double, double> BODY_FORCE{0.0, 0.0};
@@ -1130,18 +1815,35 @@ int main() {
         NR_CTRL_PTS = require(j, "spline.nr_ctrl_pts").get<int64_t>();
         DEGREE_CFG = require(j, "spline.degree").get<int>();
 
-        // BCs
+        PATCHES = parse_patch_configs(j, NR_CTRL_PTS);
+        INTERFACES = parse_patch_interfaces(j);
+
+        if (PATCHES.empty()) {
+            throw std::runtime_error("At least one patch must be configured.");
+        }
+
+        if (PATCHES.size() > 2) {
+            throw std::runtime_error(
+                "Current multipatch scaffold supports at most 2 patches.");
+        }
+
         FORCE_SIDES.clear();
-        for (const auto& fsj : require(j, "boundary_conditions.force_sides")) {
-            FORCE_SIDES.emplace_back(fsj.at(0).get<int>(), fsj.at(1).get<double>(), fsj.at(2).get<double>());
-        }
-
         DIRI_SIDES.clear();
-        for (const auto& dsj : require(j, "boundary_conditions.diri_sides")) {
-            DIRI_SIDES.emplace_back(dsj.at(0).get<int>(), dsj.at(1).get<double>(), dsj.at(2).get<double>());
+
+        for (const auto& side : PATCHES.front().boundary_conditions.force_sides) {
+            FORCE_SIDES.emplace_back(side.side, side.x, side.y);
         }
 
-        TFBC_SIDES = require(j, "boundary_conditions.tfbc_sides").get<std::vector<int>>();
+        for (const auto& side : PATCHES.front().boundary_conditions.diri_sides) {
+            DIRI_SIDES.emplace_back(side.side, side.x, side.y);
+        }
+
+        TFBC_SIDES = PATCHES.front().boundary_conditions.tfbc_sides;
+
+        if (!INTERFACES.empty() && PATCHES.size() != 2) {
+            throw std::runtime_error(
+                "Interfaces require exactly 2 patches in the current scaffold.");
+        }
 
         // body force
         {
@@ -1162,6 +1864,31 @@ int main() {
         std::cerr << "Config error: " << e.what() << "\n";
         return 1;
     }
+
+    {
+        std::ofstream reset_result_json(RESULT_JSON_PATH);
+        if (!reset_result_json.is_open()) {
+            std::cerr << "Could not reset result file: " << RESULT_JSON_PATH << "\n";
+            return 1;
+        }
+        reset_result_json << "{}\n";
+    }
+
+    if (PATCHES.size() == 2) {
+        std::cout << "Configured 2-patch scaffold with "
+                  << INTERFACES.size() << " interface(s). "
+                  << "Weak interface coupling is active."
+                  << std::endl;
+    } else {
+        const std::string cmd =
+            "cd \"" + repo_root.string() + "\" && python3 run_std_coll.py";
+
+        const int ret = std::system(cmd.c_str());
+        if (ret != 0) {
+            std::cerr << "ERROR: python reference run (run_std_coll.py) failed. system() returned " << ret << "\n";
+            return 1;
+        }
+    }
         
     // calculation of lame parameters
     double lambda = (YOUNG_MODULUS * POISSON_RATIO) / 
@@ -1175,6 +1902,133 @@ int main() {
         using geometry_t = iganet::S<iganet::UniformBSpline<real_t, 2, DEGREE, DEGREE>>;
         using variable_t = iganet::S<iganet::UniformBSpline<real_t, 2, DEGREE, DEGREE>>;
         using linear_elasticity_t = linear_elasticity<optimizer_t, geometry_t, variable_t>;
+        using linear_elasticity_2patch_t = linear_elasticity_2patch<optimizer_t, geometry_t, variable_t>;
+
+        if (PATCHES.size() == 2) {
+            linear_elasticity_2patch_t net(
+                lambda, mu, SUPERVISED_LEARNING, DEGREE, MAX_EPOCH, MIN_LOSS,
+                BODY_FORCE, PATCHES, INTERFACES, JSON_PATH,
+                {40, 40, 40},
+                {{iganet::activation::sigmoid}, {iganet::activation::sigmoid},
+                 {iganet::activation::sigmoid}, {iganet::activation::none}},
+                std::tuple(
+                    iganet::utils::to_array(PATCHES[0].nr_ctrl_pts, PATCHES[0].nr_ctrl_pts),
+                    iganet::utils::to_array(PATCHES[1].nr_ctrl_pts, PATCHES[1].nr_ctrl_pts)),
+                std::tuple(
+                    iganet::utils::to_array(PATCHES[0].nr_ctrl_pts, PATCHES[0].nr_ctrl_pts),
+                    iganet::utils::to_array(PATCHES[1].nr_ctrl_pts, PATCHES[1].nr_ctrl_pts)));
+
+            net.template output<0>().transform([=](const std::array<real_t, 2>) {
+                return std::array<real_t, 2>{BODY_FORCE.first, BODY_FORCE.second};
+            });
+            net.template output<1>().transform([=](const std::array<real_t, 2>) {
+                return std::array<real_t, 2>{BODY_FORCE.first, BODY_FORCE.second};
+            });
+
+            // Patch 1 reuses the Greville-based control-point layout of patch 0
+            // and is translated by +1 in x so the shared interface stays aligned.
+            {
+                auto patch0Geometry = net.template input<0>().as_tensor().clone();
+                const auto nPatch0 = PATCHES[0].nr_ctrl_pts * PATCHES[0].nr_ctrl_pts;
+                patch0Geometry.slice(0, 0, nPatch0).add_(1.0);
+                net.template input<1>().from_tensor(patch0Geometry);
+            }
+
+            for (const auto& side : PATCHES[0].boundary_conditions.diri_sides) {
+                switch (side.side) {
+                    case 1:
+                        net.ref0().boundary().template side<1>().template transform<1>(
+                            [=](const std::array<real_t, 1>&) { return std::array<real_t, 1>{side.x}; },
+                            std::array<iganet::short_t, 1>{0});
+                        net.ref0().boundary().template side<1>().template transform<1>(
+                            [=](const std::array<real_t, 1>&) { return std::array<real_t, 1>{side.y}; },
+                            std::array<iganet::short_t, 1>{1});
+                        break;
+                    case 2:
+                        net.ref0().boundary().template side<2>().template transform<1>(
+                            [=](const std::array<real_t, 1>&) { return std::array<real_t, 1>{side.x}; },
+                            std::array<iganet::short_t, 1>{0});
+                        net.ref0().boundary().template side<2>().template transform<1>(
+                            [=](const std::array<real_t, 1>&) { return std::array<real_t, 1>{side.y}; },
+                            std::array<iganet::short_t, 1>{1});
+                        break;
+                    case 3:
+                        net.ref0().boundary().template side<3>().template transform<1>(
+                            [=](const std::array<real_t, 1>&) { return std::array<real_t, 1>{side.x}; },
+                            std::array<iganet::short_t, 1>{0});
+                        net.ref0().boundary().template side<3>().template transform<1>(
+                            [=](const std::array<real_t, 1>&) { return std::array<real_t, 1>{side.y}; },
+                            std::array<iganet::short_t, 1>{1});
+                        break;
+                    case 4:
+                        net.ref0().boundary().template side<4>().template transform<1>(
+                            [=](const std::array<real_t, 1>&) { return std::array<real_t, 1>{side.x}; },
+                            std::array<iganet::short_t, 1>{0});
+                        net.ref0().boundary().template side<4>().template transform<1>(
+                            [=](const std::array<real_t, 1>&) { return std::array<real_t, 1>{side.y}; },
+                            std::array<iganet::short_t, 1>{1});
+                        break;
+                    default:
+                        throw std::runtime_error("Invalid Dirichlet side on patch 0.");
+                }
+            }
+
+            for (const auto& side : PATCHES[1].boundary_conditions.diri_sides) {
+                switch (side.side) {
+                    case 1:
+                        net.ref1().boundary().template side<1>().template transform<1>(
+                            [=](const std::array<real_t, 1>&) { return std::array<real_t, 1>{side.x}; },
+                            std::array<iganet::short_t, 1>{0});
+                        net.ref1().boundary().template side<1>().template transform<1>(
+                            [=](const std::array<real_t, 1>&) { return std::array<real_t, 1>{side.y}; },
+                            std::array<iganet::short_t, 1>{1});
+                        break;
+                    case 2:
+                        net.ref1().boundary().template side<2>().template transform<1>(
+                            [=](const std::array<real_t, 1>&) { return std::array<real_t, 1>{side.x}; },
+                            std::array<iganet::short_t, 1>{0});
+                        net.ref1().boundary().template side<2>().template transform<1>(
+                            [=](const std::array<real_t, 1>&) { return std::array<real_t, 1>{side.y}; },
+                            std::array<iganet::short_t, 1>{1});
+                        break;
+                    case 3:
+                        net.ref1().boundary().template side<3>().template transform<1>(
+                            [=](const std::array<real_t, 1>&) { return std::array<real_t, 1>{side.x}; },
+                            std::array<iganet::short_t, 1>{0});
+                        net.ref1().boundary().template side<3>().template transform<1>(
+                            [=](const std::array<real_t, 1>&) { return std::array<real_t, 1>{side.y}; },
+                            std::array<iganet::short_t, 1>{1});
+                        break;
+                    case 4:
+                        net.ref1().boundary().template side<4>().template transform<1>(
+                            [=](const std::array<real_t, 1>&) { return std::array<real_t, 1>{side.x}; },
+                            std::array<iganet::short_t, 1>{0});
+                        net.ref1().boundary().template side<4>().template transform<1>(
+                            [=](const std::array<real_t, 1>&) { return std::array<real_t, 1>{side.y}; },
+                            std::array<iganet::short_t, 1>{1});
+                        break;
+                    default:
+                        throw std::runtime_error("Invalid Dirichlet side on patch 1.");
+                }
+            }
+
+            net.options().max_epoch(MAX_EPOCH);
+            net.options().min_loss(MIN_LOSS);
+            net.options().min_loss_change(0.0);
+            net.options().min_loss_rel_change(0.0);
+            net.initialize_problem_data();
+
+            auto t1 = std::chrono::high_resolution_clock::now();
+            net.train();
+            auto t2 = std::chrono::high_resolution_clock::now();
+            iganet::Log(iganet::log::info)
+                << "Training took "
+                << std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1).count()
+                << " seconds\n";
+
+            net.PostProc();
+            return 0;
+        }
 
         linear_elasticity_t net(//simulation parameters 
             lambda, mu, SUPERVISED_LEARNING, MAX_EPOCH, MIN_LOSS, 

@@ -1,6 +1,6 @@
 {
   "simulation": {
-    "max_epoch": 100,
+    "max_epoch": 50,
     "min_loss": 1e-6,
     "supervised_learning": false
   },
@@ -18,13 +18,42 @@
     "nr_ctrl_pts": 8,
     "degree": 4
   },
-  "boundary_conditions": {
-    "force_sides": [],
-    "diri_sides": [
-      [1, 0.0, 0.0],
-      [2, 1.0, 0.0]
-    ],
-    "tfbc_sides": [3, 4]
-  },
+  "patches": [
+    {
+      "id": 0,
+      "spline": {
+        "nr_ctrl_pts": 8
+      },
+      "boundary_conditions": {
+        "force_sides": [],
+        "diri_sides": [
+          [1, 0.0, 0.0]
+        ],
+        "tfbc_sides": [3, 4]
+      }
+    },
+    {
+      "id": 1,
+      "spline": {
+        "nr_ctrl_pts": 8
+      },
+      "boundary_conditions": {
+        "force_sides": [],
+        "diri_sides": [
+          [2, 0.1, 0.0]
+        ],
+        "tfbc_sides": [3, 4]
+      }
+    }
+  ],
+  "interfaces": [
+    {
+      "patch_a": 0,
+      "side_a": 2,
+      "patch_b": 1,
+      "side_b": 1,
+      "orientation": "aligned"
+    }
+  ],
   "body_force": [0.0, 0.0]
 }
