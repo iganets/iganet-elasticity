@@ -1189,7 +1189,13 @@ private:
     auto& patch_output() { return this->template output<Patch>(); }
 
     template <std::size_t Patch>
+    auto const& patch_output() const { return this->template output<Patch>(); }
+
+    template <std::size_t Patch>
     auto& patch_input() { return this->template input<Patch>(); }
+
+    template <std::size_t Patch>
+    auto const& patch_input() const { return this->template input<Patch>(); }
 
     template <std::size_t Patch>
     auto& patch_ref() { return std::get<Patch>(ref_); }
@@ -1271,6 +1277,63 @@ private:
     torch::Tensor displacement_tensor(const std::array<torch::Tensor, 2>& evalPts) {
         auto disp = patch_output<Patch>().eval(evalPts);
         return torch::stack({*disp[0], *disp[1]}, 1);
+    }
+
+    template <std::size_t Patch>
+    std::vector<int64_t> side_control_point_indices(int side, bool reverseDirection = false) const {
+        const int64_t nrCtrlPts = patches_[Patch].nr_ctrl_pts;
+        auto geometryTensor = patch_input<Patch>().as_tensor();
+        const auto xCoords = geometryTensor.slice(0, 0, nrCtrlPts * nrCtrlPts);
+        const auto yCoords = geometryTensor.slice(0, nrCtrlPts * nrCtrlPts, 2 * nrCtrlPts * nrCtrlPts);
+
+        double targetCoord = 0.0;
+        bool verticalSide = (side == 1 || side == 2);
+
+        switch (side) {
+            case 1:
+                targetCoord = xCoords.min().template item<double>();
+                break;
+            case 2:
+                targetCoord = xCoords.max().template item<double>();
+                break;
+            case 3:
+                targetCoord = yCoords.min().template item<double>();
+                break;
+            case 4:
+                targetCoord = yCoords.max().template item<double>();
+                break;
+            default:
+                throw std::invalid_argument("Side must be 1, 2, 3 or 4.");
+        }
+
+        constexpr double tol = 1e-10;
+        std::vector<std::pair<double, int64_t>> orderedIndices;
+        orderedIndices.reserve(nrCtrlPts);
+
+        for (int64_t i = 0; i < nrCtrlPts * nrCtrlPts; ++i) {
+            const double x = xCoords[i].template item<double>();
+            const double y = yCoords[i].template item<double>();
+            if ((verticalSide && std::abs(x - targetCoord) < tol) ||
+                (!verticalSide && std::abs(y - targetCoord) < tol)) {
+                orderedIndices.emplace_back(verticalSide ? y : x, i);
+            }
+        }
+
+        std::sort(
+            orderedIndices.begin(),
+            orderedIndices.end(),
+            [](const auto& a, const auto& b) { return a.first < b.first; });
+
+        if (reverseDirection) {
+            std::reverse(orderedIndices.begin(), orderedIndices.end());
+        }
+
+        std::vector<int64_t> result;
+        result.reserve(orderedIndices.size());
+        for (const auto& entry : orderedIndices) {
+            result.push_back(entry.second);
+        }
+        return result;
     }
 
     template <std::size_t Patch>
@@ -1417,9 +1480,6 @@ private:
             if (interfaceCfg.patch_a == 0 && interfaceCfg.patch_b == 1) {
                 auto sideA = build_side_collocation_points<0>(interfaceCfg.side_a, true, false, true);
                 auto sideB = build_side_collocation_points<1>(interfaceCfg.side_b, true, reverse, true);
-                auto dispA = displacement_tensor<0>(sideA);
-                auto dispB = displacement_tensor<1>(sideB);
-                lossINTER += INTERFACE_DISPLACEMENT_WEIGHT_ * torch::mse_loss(dispA, dispB);
                 auto tracA = traction_tensor<0>(interfaceCfg.side_a, sideA);
                 auto tracB = traction_tensor<1>(interfaceCfg.side_b, sideB);
                 lossINTER += INTERFACE_TRACTION_WEIGHT_ *
@@ -1427,9 +1487,6 @@ private:
             } else {
                 auto sideA = build_side_collocation_points<1>(interfaceCfg.side_a, true, false, true);
                 auto sideB = build_side_collocation_points<0>(interfaceCfg.side_b, true, reverse, true);
-                auto dispA = displacement_tensor<1>(sideA);
-                auto dispB = displacement_tensor<0>(sideB);
-                lossINTER += INTERFACE_DISPLACEMENT_WEIGHT_ * torch::mse_loss(dispA, dispB);
                 auto tracA = traction_tensor<1>(interfaceCfg.side_a, sideA);
                 auto tracB = traction_tensor<0>(interfaceCfg.side_b, sideB);
                 lossINTER += INTERFACE_TRACTION_WEIGHT_ *
@@ -1443,8 +1500,47 @@ private:
     void assign_outputs_from_tensor(const torch::Tensor& outputs) {
         const auto patch0Size = patch_output<0>().as_tensor().size(0);
         const auto patch1Size = patch_output<1>().as_tensor().size(0);
-        patch_output<0>().from_tensor(outputs.slice(0, 0, patch0Size));
-        patch_output<1>().from_tensor(outputs.slice(0, patch0Size, patch0Size + patch1Size));
+        auto patch0Tensor = outputs.slice(0, 0, patch0Size);
+        auto patch1Tensor = outputs.slice(0, patch0Size, patch0Size + patch1Size).clone();
+
+        for (const auto& interfaceCfg : interfaces_) {
+            int sidePatch0 = -1;
+            int sidePatch1 = -1;
+            bool reverse = interfaceCfg.orientation == "reversed";
+
+            if (interfaceCfg.patch_a == 0 && interfaceCfg.patch_b == 1) {
+                sidePatch0 = interfaceCfg.side_a;
+                sidePatch1 = interfaceCfg.side_b;
+            } else if (interfaceCfg.patch_a == 1 && interfaceCfg.patch_b == 0) {
+                sidePatch0 = interfaceCfg.side_b;
+                sidePatch1 = interfaceCfg.side_a;
+            } else {
+                throw std::runtime_error(
+                    "2-patch strong coupling currently expects interfaces between patch 0 and 1.");
+            }
+
+            auto masterIds = side_control_point_indices<0>(sidePatch0, false);
+            auto slaveIds = side_control_point_indices<1>(sidePatch1, reverse);
+
+            auto masterIndexTensor = torch::tensor(
+                masterIds,
+                torch::TensorOptions().dtype(torch::kInt64).device(patch0Tensor.device()));
+            auto slaveIndexTensor = torch::tensor(
+                slaveIds,
+                torch::TensorOptions().dtype(torch::kInt64).device(patch1Tensor.device()));
+
+            const int64_t nPatch1Cps = patch1Size / 2;
+            auto patch0Ux = patch0Tensor.slice(0, 0, patch0Size / 2);
+            auto patch0Uy = patch0Tensor.slice(0, patch0Size / 2, patch0Size);
+            auto patch1Ux = patch1Tensor.slice(0, 0, nPatch1Cps);
+            auto patch1Uy = patch1Tensor.slice(0, nPatch1Cps, patch1Size);
+
+            patch1Ux.index_put_({slaveIndexTensor}, patch0Ux.index_select(0, masterIndexTensor));
+            patch1Uy.index_put_({slaveIndexTensor}, patch0Uy.index_select(0, masterIndexTensor));
+        }
+
+        patch_output<0>().from_tensor(patch0Tensor);
+        patch_output<1>().from_tensor(patch1Tensor);
     }
 
     template <std::size_t Patch>
@@ -1638,7 +1734,6 @@ private:
     std::string JSON_PATH_;
     std::pair<double, double> BODY_FORCE_;
     bool SUPERVISED_LEARNING_;
-    double INTERFACE_DISPLACEMENT_WEIGHT_ = 25.0;
     double INTERFACE_TRACTION_WEIGHT_ = 5.0;
 
 public:
@@ -1877,7 +1972,7 @@ int main() {
     if (PATCHES.size() == 2) {
         std::cout << "Configured 2-patch scaffold with "
                   << INTERFACES.size() << " interface(s). "
-                  << "Weak interface coupling is active."
+                  << "Strong displacement coupling and weak traction coupling are active."
                   << std::endl;
     } else {
         const std::string cmd =
