@@ -558,7 +558,7 @@ public:
         torch::Tensor elastLoss;
         std::optional<torch::Tensor> bcLoss;
         std::optional<torch::Tensor> tfbcLoss;
-        std::optional<torch::Tensor> gsLoss;
+        std::optional<torch::Tensor> supLoss;
         std::optional<torch::Tensor> forceLoss;
 
         // pre-allocation of the tensors for the traction boundary conditions
@@ -824,29 +824,29 @@ public:
         auto& ux_xx = hessianColl(0,0,0);
         auto& ux_xy = hessianColl(0,1,0);
         auto& ux_xz = hessianColl(0,2,0);
-        auto& ux_yx = hessianColl(0,0,1);
-        auto& ux_yy = hessianColl(0,1,1);
-        auto& ux_yz = hessianColl(0,2,1);
-        auto& ux_zx = hessianColl(0,0,2);
-        auto& ux_zy = hessianColl(0,1,2);
-        auto& ux_zz = hessianColl(0,2,2);
+        auto& ux_yx = hessianColl(1,0,0);
+        auto& ux_yy = hessianColl(1,1,0);
+        auto& ux_yz = hessianColl(1,2,0);
+        auto& ux_zx = hessianColl(2,0,0);
+        auto& ux_zy = hessianColl(2,1,0);
+        auto& ux_zz = hessianColl(2,2,0);
 
-        auto& uy_xx = hessianColl(1,0,0);
-        auto& uy_xy = hessianColl(1,1,0);
-        auto& uy_xz = hessianColl(1,2,0);
+        auto& uy_xx = hessianColl(0,0,1);
+        auto& uy_xy = hessianColl(0,1,1);
+        auto& uy_xz = hessianColl(0,2,1);
         auto& uy_yx = hessianColl(1,0,1);
         auto& uy_yy = hessianColl(1,1,1);
         auto& uy_yz = hessianColl(1,2,1);
-        auto& uy_zx = hessianColl(1,0,2);
-        auto& uy_zy = hessianColl(1,1,2);
-        auto& uy_zz = hessianColl(1,2,2);
+        auto& uy_zx = hessianColl(2,0,1);
+        auto& uy_zy = hessianColl(2,1,1);
+        auto& uy_zz = hessianColl(2,2,1);
 
-        auto& uz_xx = hessianColl(2,0,0);
-        auto& uz_xy = hessianColl(2,1,0);
-        auto& uz_xz = hessianColl(2,2,0);
-        auto& uz_yx = hessianColl(2,0,1);
-        auto& uz_yy = hessianColl(2,1,1);
-        auto& uz_yz = hessianColl(2,2,1);
+        auto& uz_xx = hessianColl(0,0,2);
+        auto& uz_xy = hessianColl(0,1,2);
+        auto& uz_xz = hessianColl(0,2,2);
+        auto& uz_yx = hessianColl(1,0,2);
+        auto& uz_yy = hessianColl(1,1,2);
+        auto& uz_yz = hessianColl(1,2,2);
         auto& uz_zx = hessianColl(2,0,2);
         auto& uz_zy = hessianColl(2,1,2);
         auto& uz_zz = hessianColl(2,2,2);
@@ -862,28 +862,49 @@ public:
 
         torch::Tensor divZeros = torch::stack({divStressX, divStressY, divStressZ}, /*dim=*/1);
         
-       for (int i = 0; i < size; ++i) {
+        for (int i = 0; i < size; ++i) {
+            divStressX[i] =
+                (lambda_ + 2.0 * mu_) * ux_xx[i]
+            + mu_ * ux_yy[i]
+            + mu_ * ux_zz[i]
+            + (lambda_ + mu_) * (uy_xy[i] + uz_xz[i]);
+
+            divStressY[i] =
+                mu_ * uy_xx[i]
+            + (lambda_ + 2.0 * mu_) * uy_yy[i]
+            + mu_ * uy_zz[i]
+            + (lambda_ + mu_) * (ux_yx[i] + uz_yz[i]);
+
+            divStressZ[i] =
+                mu_ * uz_xx[i]
+            + mu_ * uz_yy[i]
+            + (lambda_ + 2.0 * mu_) * uz_zz[i]
+            + (lambda_ + mu_) * (ux_zx[i] + uy_zy[i]);
+        }
+
+    torch::Tensor divStress = torch::stack({divStressX, divStressY, divStressZ}, 1);
+       //for (int i = 0; i < size; ++i) {
 
             // d/dx(div(u)) -> ux_xx + uy_yx + uz_zx
             // d/dy(div(u)) -> ux_xy + uy_yy + uz_zy
             // d/dz(div(u)) -> ux_xz + uy_yz + uz_zz
 
             // Laplacian terms
-            const auto lapUx = ux_xx[i] + ux_yy[i] + ux_zz[i];
-            const auto lapUy = uy_xx[i] + uy_yy[i] + uy_zz[i];
-            const auto lapUz = uz_xx[i] + uz_yy[i] + uz_zz[i];
+            //const auto lapUx = ux_xx[i] + ux_yy[i] + ux_zz[i];
+            //const auto lapUy = uy_xx[i] + uy_yy[i] + uy_zz[i];
+            //const auto lapUz = uz_xx[i] + uz_yy[i] + uz_zz[i];
 
-            const auto dDiv_dx = ux_xx[i] + uy_yx[i] + uz_zx[i];
-            const auto dDiv_dy = ux_xy[i] + uy_yy[i] + uz_zy[i];
-            const auto dDiv_dz = ux_xz[i] + uy_yz[i] + uz_zz[i];
+            //const auto dDiv_dx = ux_xx[i] + uy_yx[i] + uz_zx[i];
+            //const auto dDiv_dy = ux_xy[i] + uy_yy[i] + uz_zy[i];
+            //const auto dDiv_dz = ux_xz[i] + uy_yz[i] + uz_zz[i];
 
-            divStressX[i] = mu_ * lapUx + (lambda_ + mu_) * dDiv_dx;
-            divStressY[i] = mu_ * lapUy + (lambda_ + mu_) * dDiv_dy;
-            divStressZ[i] = mu_ * lapUz + (lambda_ + mu_) * dDiv_dz;
-        }
+            //divStressX[i] = mu_ * lapUx + (lambda_ + mu_) * dDiv_dx;
+            //divStressY[i] = mu_ * lapUy + (lambda_ + mu_) * dDiv_dy;
+            //divStressZ[i] = mu_ * lapUz + (lambda_ + mu_) * dDiv_dz;
+        //}
          
         // create a tensor of the divergence of the stress tensor
-        torch::Tensor divStress = torch::stack({divStressX, divStressY, divStressZ}, /*dim=*/1);
+        //torch::Tensor divStress = torch::stack({divStressX, divStressY, divStressZ}, /*dim=*/1);
 
         // BODY FORCE: constant vector (fx, fy)
         //auto opts = divStress.options();  // device + dtype passend zu divStress -> bereits davor definiert
@@ -926,7 +947,7 @@ public:
             // only consider BC loss if dirichlet BCs are applied
             if (!DIRI_SIDES_.empty()) {
                 // add a BC weight for penalization of the training
-                int bcWeight = 1e7;
+                int bcWeight = 1e5;
                 // initialize bcLoss variable
                 bcLoss = torch::tensor(0.0,outputs.options());
 
@@ -1023,18 +1044,20 @@ public:
             stdCollDisplacements_ = stdCollDisplacements_.to(netDisplacements_.options()); //make sure stdCollDisplacements_ matches dtype/device of netDisplacements
 
             // supervised loss: MSE of net against standard collocation solution
-            gsLoss = 1e9 * torch::mse_loss(netDisplacements_, stdCollDisplacements_);
+            int supWeight = 1e7;
+            supLoss = supWeight * torch::mse_loss(netDisplacements_, stdCollDisplacements_);
 
             // calculation of the loss function for double-sided constraint solid
             // div(sigma) + f = 0 --> div(sigma) = -f
             elastLoss = torch::mse_loss(divStress, -bodyForce);
 
             // add the elasticity loss and supervised loss to the total loss
-            totalLoss = *gsLoss + elastLoss;
+            totalLoss = *supLoss + elastLoss;
 
             // add the elasticity and supervised losses to the cmd-output variable
-            singleLossOutput << "GL " << std::setw(11) << (*gsLoss).item<double>()
-                            << " + EL " << std::setw(11) << elastLoss.item<double>();
+            singleLossOutput << "SL " << std::setw(11) << (*supLoss).item<double>() / supWeight 
+                             << " * 1e" << static_cast<int>(std::log10(supWeight))
+                             << " + EL " << std::setw(11) << elastLoss.item<double>();
 
             // only consider traction-free-bc (tfbc) loss if tfbcs are applied
             if (!TFBC_SIDES_.empty()) {
@@ -1301,15 +1324,15 @@ int main() {
         return 1;
     }
 
-    // // run standard collocation simulation with the parameters from the config file 
-    // const std::string cmd =
-    //     "cd \"" + repo_root.string() + "\" && python3 run_std_coll.py";
+    // run standard collocation simulation with the parameters from the config file 
+    const std::string cmd =
+        "cd \"" + repo_root.string() + "\" && python3 run_std_coll.py";
 
-    // const int ret = std::system(cmd.c_str());
-    // if (ret != 0) {
-    //     std::cerr << "ERROR: python reference run (run_std_coll.py) failed. system() returned " << ret << "\n";
-    //     return 1;
-    // }
+    const int ret = std::system(cmd.c_str());
+    if (ret != 0) {
+        std::cerr << "ERROR: python reference run (run_std_coll.py) failed. system() returned " << ret << "\n";
+        return 1;
+    }
 
     // material parameters
     double YOUNG_MODULUS = 0.0;
@@ -1409,7 +1432,8 @@ int main() {
             // Number of neurons per layer 
             {25, 25}, 
             // Activation functions 
-            {{iganet::activation::sigmoid}, {iganet::activation::sigmoid}, {iganet::activation::none}}, 
+            //{{iganet::activation::sigmoid}, {iganet::activation::sigmoid}, {iganet::activation::none}},
+            {{iganet::activation::sigmoid},{iganet::activation::sigmoid}, {iganet::activation::none}}, 
             // Number of B-spline coefficients of the geometry 
             std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS, NR_CTRL_PTS)), 
             // Number of B-spline coefficients of the variable 
