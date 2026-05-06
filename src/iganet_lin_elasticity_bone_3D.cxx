@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -34,6 +35,7 @@ constexpr double kInterfaceTractionWeight = 10.0;
 constexpr int64_t kInteriorCollocationStride = 2;
 constexpr int64_t kBoundaryCollocationStride = 2;
 constexpr int64_t kInterfaceCollocationStride = 2;
+constexpr int64_t kLossPrintClosureStride = 10;
 
 struct SideVector3 {
     int side = 0;
@@ -87,6 +89,16 @@ struct ControlPointRef {
 struct InterfaceOrderCache {
     torch::Tensor order_a;
     torch::Tensor order_b;
+};
+
+struct GeometryDerivativeCache {
+    iganet::utils::BlockTensor<torch::Tensor, 3, 3, 3> hess;
+    iganet::utils::BlockTensor<torch::Tensor, 3, 3> jac_inv;
+};
+
+struct SplineDerivativeBasisCache {
+    std::array<torch::Tensor, 3> grad;
+    std::array<std::array<torch::Tensor, 3>, 3> hess;
 };
 
 torch::Tensor strided_indices(int64_t size, int64_t stride, torch::Device device) {
@@ -704,6 +716,8 @@ private:
         typename Customizable::template input_interior_coeff_indices_t<0> G_coeff_indices;
         typename Customizable::template input_interior_knot_indices_t<0> G_knot_indices_interior;
         typename Customizable::template input_interior_coeff_indices_t<0> G_coeff_indices_interior;
+        GeometryDerivativeCache geometry_interior;
+        SplineDerivativeBasisCache output_basis_interior;
     };
 
     template <std::size_t Patch>
@@ -884,12 +898,65 @@ private:
     }
 
     template <std::size_t Patch>
+    iganet::utils::BlockTensor<torch::Tensor, 3, 3, 3>
+    physical_hessian_with_cached_geometry() {
+        auto& cache = patch_cache<Patch>();
+
+        const auto numEval = cache.interiorCollPts.first[0].numel();
+        const auto sizes = cache.interiorCollPts.first[0].sizes();
+        auto evalPrecomputed = [&](const torch::Tensor& basis) {
+            return patch_output<Patch>().eval_from_precomputed(
+                basis, cache.var_coeff_indices_interior, numEval, sizes);
+        };
+
+        iganet::utils::BlockTensor<torch::Tensor, 3, 3> paramJac;
+        for (int derivDim = 0; derivDim < 3; ++derivDim) {
+            auto values = evalPrecomputed(cache.output_basis_interior.grad[derivDim]);
+            for (int component = 0; component < 3; ++component) {
+                paramJac.set(component, derivDim, values(0, component));
+            }
+        }
+
+        iganet::utils::BlockTensor<torch::Tensor, 3, 3, 3> paramHess;
+        for (int derivA = 0; derivA < 3; ++derivA) {
+            for (int derivB = 0; derivB < 3; ++derivB) {
+                auto values = evalPrecomputed(cache.output_basis_interior.hess[derivA][derivB]);
+                for (int component = 0; component < 3; ++component) {
+                    paramHess.set(derivA, derivB, component, values(0, component));
+                }
+            }
+        }
+
+        auto physicalJac = paramJac * cache.geometry_interior.jac_inv;
+
+        iganet::utils::BlockTensor<torch::Tensor, 3, 3, 3> physicalHess;
+
+        for (int component = 0; component < 3; ++component) {
+            auto hessComponent = paramHess.slice(component);
+
+            for (int geomComponent = 0; geomComponent < 3; ++geomComponent) {
+                hessComponent -= physicalJac(component, geomComponent) *
+                                 cache.geometry_interior.hess.slice(geomComponent);
+            }
+
+            auto transformed = cache.geometry_interior.jac_inv.tr() *
+                               hessComponent *
+                               cache.geometry_interior.jac_inv;
+
+            for (int i = 0; i < 3; ++i) {
+                for (int j = 0; j < 3; ++j) {
+                    physicalHess.set(i, j, component, transformed(i, j));
+                }
+            }
+        }
+
+        return physicalHess;
+    }
+
+    template <std::size_t Patch>
     torch::Tensor compute_patch_pde_loss() {
         auto& cache = patch_cache<Patch>();
-        auto hess = patch_output<Patch>().ihess(
-            patch_input<Patch>(), cache.interiorCollPts.first,
-            cache.var_knot_indices_interior, cache.var_coeff_indices_interior,
-            cache.G_knot_indices_interior, cache.G_coeff_indices_interior);
+        auto hess = physical_hessian_with_cached_geometry<Patch>();
 
         const auto lapUx = hess(0, 0, 0) + hess(1, 1, 0) + hess(2, 2, 0);
         const auto lapUy = hess(0, 0, 1) + hess(1, 1, 1) + hess(2, 2, 1);
@@ -1160,6 +1227,68 @@ private:
     }
 
     template <std::size_t Patch>
+    void initialize_output_derivative_basis_cache() {
+        auto& cache = patch_cache<Patch>();
+        auto& output = patch_output<Patch>();
+        const auto& xi = cache.interiorCollPts.first;
+        const auto& knot = cache.var_knot_indices_interior;
+
+        cache.output_basis_interior.grad[0] =
+            output.template eval_basfunc<iganet::functionspace::interior, iganet::deriv::dx>(xi, knot).detach();
+        cache.output_basis_interior.grad[1] =
+            output.template eval_basfunc<iganet::functionspace::interior, iganet::deriv::dy>(xi, knot).detach();
+        cache.output_basis_interior.grad[2] =
+            output.template eval_basfunc<iganet::functionspace::interior, iganet::deriv::dz>(xi, knot).detach();
+
+        cache.output_basis_interior.hess[0][0] =
+            output.template eval_basfunc<iganet::functionspace::interior, iganet::deriv::dx + iganet::deriv::dx>(xi, knot).detach();
+        cache.output_basis_interior.hess[0][1] =
+            output.template eval_basfunc<iganet::functionspace::interior, iganet::deriv::dx + iganet::deriv::dy>(xi, knot).detach();
+        cache.output_basis_interior.hess[0][2] =
+            output.template eval_basfunc<iganet::functionspace::interior, iganet::deriv::dx + iganet::deriv::dz>(xi, knot).detach();
+        cache.output_basis_interior.hess[1][0] =
+            output.template eval_basfunc<iganet::functionspace::interior, iganet::deriv::dy + iganet::deriv::dx>(xi, knot).detach();
+        cache.output_basis_interior.hess[1][1] =
+            output.template eval_basfunc<iganet::functionspace::interior, iganet::deriv::dy + iganet::deriv::dy>(xi, knot).detach();
+        cache.output_basis_interior.hess[1][2] =
+            output.template eval_basfunc<iganet::functionspace::interior, iganet::deriv::dy + iganet::deriv::dz>(xi, knot).detach();
+        cache.output_basis_interior.hess[2][0] =
+            output.template eval_basfunc<iganet::functionspace::interior, iganet::deriv::dz + iganet::deriv::dx>(xi, knot).detach();
+        cache.output_basis_interior.hess[2][1] =
+            output.template eval_basfunc<iganet::functionspace::interior, iganet::deriv::dz + iganet::deriv::dy>(xi, knot).detach();
+        cache.output_basis_interior.hess[2][2] =
+            output.template eval_basfunc<iganet::functionspace::interior, iganet::deriv::dz + iganet::deriv::dz>(xi, knot).detach();
+    }
+
+    template <std::size_t Patch>
+    void initialize_geometry_derivative_cache() {
+        auto& cache = patch_cache<Patch>();
+        auto hessG = patch_input<Patch>().hess(
+            cache.interiorCollPts.first,
+            cache.G_knot_indices_interior,
+            cache.G_coeff_indices_interior);
+        auto jacInvG = patch_input<Patch>().jac(
+            cache.interiorCollPts.first,
+            cache.G_knot_indices_interior,
+            cache.G_coeff_indices_interior).ginv();
+
+        for (int component = 0; component < 3; ++component) {
+            for (int i = 0; i < 3; ++i) {
+                for (int j = 0; j < 3; ++j) {
+                    cache.geometry_interior.hess.set(
+                        i, j, component, hessG(i, j, component).detach());
+                }
+            }
+        }
+
+        for (int i = 0; i < 3; ++i) {
+            for (int j = 0; j < 3; ++j) {
+                cache.geometry_interior.jac_inv.set(i, j, jacInvG(i, j).detach());
+            }
+        }
+    }
+
+    template <std::size_t Patch>
     void initialize_patch_data() {
         auto& cache = patch_cache<Patch>();
         cache.collPts = Base::template collPts<Patch>(iganet::collPts::greville);
@@ -1191,6 +1320,9 @@ private:
         cache.G_coeff_indices_interior =
             patch_input<Patch>().template find_coeff_indices<iganet::functionspace::interior>(
                 cache.G_knot_indices_interior);
+
+        initialize_output_derivative_basis_cache<Patch>();
+        initialize_geometry_derivative_cache<Patch>();
     }
 
     template <std::size_t Patch>
@@ -1234,7 +1366,10 @@ private:
     int maxEpoch_ = 0;
     double minLoss_ = 0.0;
     std::string jsonPath_;
+    std::string optimizerName_;
+    double learningRate_ = 1.0;
     int64_t lastExportEpoch_ = -1;
+    int64_t closureEvalCount_ = 0;
     double lastTotalLoss_ = 0.0;
     double lastPDELoss_ = 0.0;
     double lastBCLoss_ = 0.0;
@@ -1250,6 +1385,7 @@ public:
                            std::vector<PatchConfig> patches,
                            std::vector<PatchInterfaceConfig> interfaces,
                            int maxEpoch, double minLoss, std::string jsonPath,
+                           std::string optimizerName, double learningRate,
                            std::vector<int64_t>&& layers,
                            std::vector<std::vector<std::any>>&& activations,
                            Args&&... args)
@@ -1263,7 +1399,9 @@ public:
           interfaces_(std::move(interfaces)),
           maxEpoch_(maxEpoch),
           minLoss_(minLoss),
-          jsonPath_(std::move(jsonPath)) {}
+          jsonPath_(std::move(jsonPath)),
+          optimizerName_(std::move(optimizerName)),
+          learningRate_(learningRate) {}
 
     void load_geometry(const std::vector<ItdPatch>& patches) {
         for_each_patch_index<NumPatches>([&](auto P) {
@@ -1292,6 +1430,7 @@ public:
     }
 
     torch::Tensor loss(const torch::Tensor& outputs, int64_t epoch) override {
+        ++closureEvalCount_;
         assign_outputs_from_tensor(outputs);
 
         auto rawPDE = torch::zeros({}, outputs.options());
@@ -1309,37 +1448,47 @@ public:
         auto lossINTER = kInterfaceTractionWeight * rawINTER;
         auto totalLoss = lossPDE + lossBC + lossINTER;
 
-        const double rawPDEValue = rawPDE.template item<double>();
-        const double rawBCValue = rawBC.template item<double>();
-        const double rawINTERValue = rawINTER.template item<double>();
-        const double lossPDEValue = lossPDE.template item<double>();
-        const double lossBCValue = lossBC.template item<double>();
-        const double lossINTERValue = lossINTER.template item<double>();
-        const double totalLossValue = totalLoss.template item<double>();
+        const bool shouldExport = ((epoch % 10 == 0) ||
+                                   (epoch == maxEpoch_ - 1)) &&
+                                  epoch != lastExportEpoch_;
+        const bool shouldPrint =
+            (closureEvalCount_ == 1) ||
+            (closureEvalCount_ % kLossPrintClosureStride == 0) ||
+            shouldExport;
 
-        std::cout << "loss " << std::setw(11) << totalLossValue
-                  << " | PDE mse " << std::setw(10) << rawPDEValue
-                  << " * " << kPDEWeight << " = " << std::setw(10) << lossPDEValue
-                  << " | BC mse " << std::setw(10) << rawBCValue
-                  << " * " << kBoundaryConditionWeight << " = " << std::setw(10) << lossBCValue
-                  << " | IF mse " << std::setw(10) << rawINTERValue
-                  << " * " << kInterfaceTractionWeight << " = " << std::setw(10) << lossINTERValue
-                  << std::endl;
+        if (shouldPrint || shouldExport) {
+            const double rawPDEValue = rawPDE.template item<double>();
+            const double rawBCValue = rawBC.template item<double>();
+            const double rawINTERValue = rawINTER.template item<double>();
+            const double lossPDEValue = lossPDE.template item<double>();
+            const double lossBCValue = lossBC.template item<double>();
+            const double lossINTERValue = lossINTER.template item<double>();
+            const double totalLossValue = totalLoss.template item<double>();
 
-        lastTotalLoss_ = totalLossValue;
-        lastPDELoss_ = lossPDEValue;
-        lastBCLoss_ = lossBCValue;
-        lastInterfaceLoss_ = lossINTERValue;
-        lastPDERawLoss_ = rawPDEValue;
-        lastBCRawLoss_ = rawBCValue;
-        lastInterfaceRawLoss_ = rawINTERValue;
+            lastTotalLoss_ = totalLossValue;
+            lastPDELoss_ = lossPDEValue;
+            lastBCLoss_ = lossBCValue;
+            lastInterfaceLoss_ = lossINTERValue;
+            lastPDERawLoss_ = rawPDEValue;
+            lastBCRawLoss_ = rawBCValue;
+            lastInterfaceRawLoss_ = rawINTERValue;
 
-        const bool shouldExport = (epoch % 10 == 0) ||
-                                  (epoch == maxEpoch_ - 1) ||
-                                  (totalLossValue <= minLoss_);
-        if (shouldExport && epoch != lastExportEpoch_) {
-            write_result(epoch, totalLoss, lossPDE, lossBC, lossINTER, true);
-            lastExportEpoch_ = epoch;
+            if (shouldPrint) {
+                std::cout << "loss " << std::setw(11) << totalLossValue
+                          << " | PDE mse " << std::setw(10) << rawPDEValue
+                          << " * " << kPDEWeight << " = " << std::setw(10) << lossPDEValue
+                          << " | BC mse " << std::setw(10) << rawBCValue
+                          << " * " << kBoundaryConditionWeight << " = " << std::setw(10) << lossBCValue
+                          << " | IF mse " << std::setw(10) << rawINTERValue
+                          << " * " << kInterfaceTractionWeight << " = " << std::setw(10) << lossINTERValue
+                          << " | closure " << closureEvalCount_
+                          << std::endl;
+            }
+
+            if (shouldExport) {
+                write_result(epoch, totalLoss, lossPDE, lossBC, lossINTER, true);
+                lastExportEpoch_ = epoch;
+            }
         }
 
         return totalLoss;
@@ -1383,6 +1532,8 @@ public:
                 {"boundary", kBoundaryConditionWeight},
                 {"interface", kInterfaceTractionWeight}
             }},
+            {"net_Optimizer", optimizerName_},
+            {"net_LearningRate", learningRate_},
             {"net_OriginCtrlPts", origin},
             {"net_Displacements", disp},
             {"net_CtrlPts", deformed},
@@ -1391,6 +1542,10 @@ public:
             {"net_StrongCouplingGroups", strongCouplingGroups_.size()},
             {"net_StrongDirichlet", true},
             {"net_Device", deviceName_},
+            {"net_Precision", "float32"},
+            {"net_GeometryDerivativeCache", true},
+            {"net_OutputDerivativeBasisCache", true},
+            {"net_LossPrintClosureStride", kLossPrintClosureStride},
             {"net_CollocationStrides", {
                 {"interior", kInteriorCollocationStride},
                 {"boundary", kBoundaryCollocationStride},
@@ -1417,27 +1572,35 @@ public:
     }
 };
 
-template <int Degree>
-int run_bone_case(const std::vector<ItdPatch>& itdPatches,
-                  const std::vector<PatchConfig>& patchConfigs,
-                  const std::vector<PatchInterfaceConfig>& interfaces,
-                  double lambda, double mu, std::array<double, 3> bodyForce,
-                  int maxEpoch, double minLoss, const std::string& jsonPath) {
-    using real_t = double;
-    using optimizer_t = torch::optim::LBFGS;
+template <int Degree, typename Optimizer>
+int run_bone_case_with_optimizer(const std::vector<ItdPatch>& itdPatches,
+                                 const std::vector<PatchConfig>& patchConfigs,
+                                 const std::vector<PatchInterfaceConfig>& interfaces,
+                                 double lambda, double mu, std::array<double, 3> bodyForce,
+                                 int maxEpoch, double minLoss,
+                                 const std::string& jsonPath,
+                                 const std::string& optimizerName,
+                                 double learningRate) {
+    using real_t = float;
     using geometry_t = iganet::S<iganet::UniformBSpline<real_t, 3, Degree, Degree, Degree>>;
     using variable_t = iganet::S<iganet::UniformBSpline<real_t, 3, Degree, Degree, Degree>>;
-    using net_t = bone_linear_elasticity<optimizer_t, geometry_t, variable_t, kNumBonePatches>;
+    using net_t = bone_linear_elasticity<Optimizer, geometry_t, variable_t, kNumBonePatches>;
 
     const auto device = torch::cuda::is_available() ? torch::Device(torch::kCUDA)
                                                     : torch::Device(torch::kCPU);
     const auto igaOptions = iganet::Options<real_t>{}.device(device);
     std::cout << "Using IGANet tensor device: " << device << "\n"
+              << "Using spline precision: float32\n"
+              << "Using optimizer: " << optimizerName
+              << " (learning_rate=" << learningRate << ")\n"
               << "Collocation strides: interior=" << kInteriorCollocationStride
               << ", boundary=" << kBoundaryCollocationStride
-              << ", interface=" << kInterfaceCollocationStride << "\n";
+              << ", interface=" << kInterfaceCollocationStride << "\n"
+              << "PDE caches: geometry derivatives + output derivative basis\n"
+              << "Loss print closure stride: " << kLossPrintClosureStride << "\n";
 
     net_t net(lambda, mu, bodyForce, patchConfigs, interfaces, maxEpoch, minLoss, jsonPath,
+              optimizerName, learningRate,
               {48, 48, 48},
               {{iganet::activation::sigmoid}, {iganet::activation::sigmoid},
                {iganet::activation::sigmoid}, {iganet::activation::none}},
@@ -1451,6 +1614,7 @@ int run_bone_case(const std::vector<ItdPatch>& itdPatches,
     net.initialize_problem_data();
     net.options().max_epoch(maxEpoch);
     net.options().min_loss(minLoss);
+    net.optimizerOptions().lr(learningRate);
 
     const auto t1 = std::chrono::high_resolution_clock::now();
     net.train();
@@ -1463,6 +1627,30 @@ int run_bone_case(const std::vector<ItdPatch>& itdPatches,
 
     net.PostProc();
     return 0;
+}
+
+template <int Degree>
+int run_bone_case(const std::vector<ItdPatch>& itdPatches,
+                  const std::vector<PatchConfig>& patchConfigs,
+                  const std::vector<PatchInterfaceConfig>& interfaces,
+                  double lambda, double mu, std::array<double, 3> bodyForce,
+                  int maxEpoch, double minLoss, const std::string& jsonPath,
+                  const std::string& optimizerName, double learningRate) {
+    if (optimizerName == "lbfgs") {
+        return run_bone_case_with_optimizer<Degree, torch::optim::LBFGS>(
+            itdPatches, patchConfigs, interfaces, lambda, mu, bodyForce, maxEpoch,
+            minLoss, jsonPath, optimizerName, learningRate);
+    }
+
+    if (optimizerName == "adamw") {
+        return run_bone_case_with_optimizer<Degree, torch::optim::AdamW>(
+            itdPatches, patchConfigs, interfaces, lambda, mu, bodyForce, maxEpoch,
+            minLoss, jsonPath, optimizerName, learningRate);
+    }
+
+    std::cerr << "Unsupported optimizer '" << optimizerName
+              << "'. Use 'adamw' or 'lbfgs'.\n";
+    return 1;
 }
 
 int main() {
@@ -1499,7 +1687,9 @@ int main() {
     double poissonRatio = 0.3;
     int maxEpoch = 50;
     double minLoss = 1e-10;
-    std::array<double, 3> bodyForce{0.0, 0.0, 50.0};
+    std::string optimizerName = "lbfgs";
+    double learningRate = 1e-3;
+    std::array<double, 3> bodyForce{0.0, 0.0, -100.0};
 
     try {
         if (config.contains("material")) {
@@ -1509,6 +1699,16 @@ int main() {
         if (config.contains("simulation")) {
             maxEpoch = require(config, "simulation.max_epoch").get<int>();
             minLoss = require(config, "simulation.min_loss").get<double>();
+            if (config["simulation"].contains("optimizer")) {
+                optimizerName = config["simulation"]["optimizer"].get<std::string>();
+                std::transform(optimizerName.begin(), optimizerName.end(),
+                               optimizerName.begin(), [](unsigned char c) {
+                                   return static_cast<char>(std::tolower(c));
+                               });
+            }
+            if (config["simulation"].contains("learning_rate")) {
+                learningRate = config["simulation"]["learning_rate"].get<double>();
+            }
         }
         if (config.contains("body_force")) {
             const auto& bf = require(config, "body_force");
@@ -1607,5 +1807,6 @@ int main() {
     }
 
     return run_bone_case<2>(itdPatches, patchConfigs, interfaces, lambda, mu,
-                            bodyForce, maxEpoch, minLoss, resultPath.string());
+                            bodyForce, maxEpoch, minLoss, resultPath.string(),
+                            optimizerName, learningRate);
 }
