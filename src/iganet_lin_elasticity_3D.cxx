@@ -1439,7 +1439,7 @@ int main() {
             // Number of B-spline coefficients of the variable 
             std::tuple(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS, NR_CTRL_PTS)) );
 
-        // imposing body force - ich brauche Volumenkraft und keine Randkraft
+        // impose body force; this should be a volumetric load, not a boundary load
        /* net.template output<0>().transform([=](const std::array<real_t, 3> xi) {
             return std::array<real_t, 3>{BODY_FORCE[0], BODY_FORCE[1], BODY_FORCE[2]};
         });*/

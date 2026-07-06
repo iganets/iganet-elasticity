@@ -44,19 +44,19 @@ int run(
     const std::string jsonPath = resultJsonPath.string();
 
     std::array<std::vector<real_t>, 3> knotVectors;
-    XmlGeometryData xmlData;   // leer wenn parametrisch
+    XmlGeometryData xmlData;   // empty in parametric mode
 
     if (geoMode == GeometryMode::Xml) {
 
-        // --- XML-Modus: Knotenvektoren + Kontrollpunkte aus Datei ---
+        // --- XML mode: load knot vectors and control points from file ---
         xmlData = loadXmlKnotVectors(xmlPath, "100", DEGREE);
         knotVectors = xmlData.knotVectors;
-        nrCtrlPts   = xmlData.nCtrlPts;  // Überschreibt den Config-Wert
+        nrCtrlPts   = xmlData.nCtrlPts;  // overrides the config value
 
     } else {
 
-        // --- Parametrischer Modus: uniformer Einheitswürfel ---
-        // nr_ctrl_pts aus geometry-Block (falls vorhanden), sonst aus spline-Block
+        // --- Parametric mode: uniform unit cube ---
+        // Take nr_ctrl_pts from the geometry block if present, otherwise from the spline block.
         if (j.contains("geometry") && j["geometry"].contains("nr_ctrl_pts"))
             nrCtrlPts = j["geometry"]["nr_ctrl_pts"].get<int64_t>();
 
@@ -64,7 +64,7 @@ int run(
             knotVectors[d] = makeUniformKnotVector(static_cast<int>(nrCtrlPts), DEGREE);
 
         std::cout << "[Parametric] nrCtrlPts=" << nrCtrlPts
-                  << "  KV-Länge=" << knotVectors[0].size() << "\n";
+                  << "  knot-vector length=" << knotVectors[0].size() << "\n";
     }
 
     net_t net(
@@ -75,12 +75,12 @@ int run(
         {{iganet::activation::sigmoid},
          {iganet::activation::sigmoid},
          {iganet::activation::none}},
-        std::make_tuple(std::make_tuple(knotVectors)),  // Geometrie
-        std::make_tuple(std::make_tuple(knotVectors))); // Variable
+        std::make_tuple(std::make_tuple(knotVectors)),  // geometry
+        std::make_tuple(std::make_tuple(knotVectors))); // variable
 
     if (geoMode == GeometryMode::Xml) {
 
-        // Kontrollpunkte und KVs aus XML laden
+        // Load control points and knot vectors from XML
         net.template input<0>().from_xml(xmlData.doc, 0);
 
     } else {
@@ -107,7 +107,7 @@ int run(
                         origin[2] + scale[2]*xi[2]};
             });
 
-        std::cout << "[Parametric] Geometrie gesetzt:"
+        std::cout << "[Parametric] Geometry set:"
                   << "  origin=(" << origin[0] << "," << origin[1] << "," << origin[2] << ")"
                   << "  scale=(" << scale[0] << "," << scale[1] << "," << scale[2] << ")\n";
     }
@@ -188,7 +188,7 @@ int run(
     }
     int64_t nCtrlPtsXml = totalSize / 3;
 
-    // Debug-Ausgabe
+    // Debug output
     std::cout << "\n=== CONTROL POINT DEBUG ===\n";
     std::cout << "Total tensor size: " << totalSize << "\n";
     std::cout << "Number of control points: " << nCtrlPtsXml << "\n";
@@ -217,12 +217,12 @@ int run(
     net.appendToJsonFile("net_nrCtrlPtsFromXml",  nCtrlPtsXml);
     net.appendToJsonFile("net_Degree",            DEGREE);
 
-    //  Optional: GISMO-Referenzsimulation
+    // Optional: GISMO reference simulation
 
 #ifdef IGANET_WITH_GISMO
     if (runGsRefSim) {
-        // GISMO erwartet 2D-Tupel für DIRI_SIDES / FORCE_SIDES
-        // Konvertierung: (side,ux,uy,uz) → (side,ux,uy)  [nur x/y verwendet]
+        // GISMO expects 2D tuples for DIRI_SIDES / FORCE_SIDES
+        // Conversion: (side,ux,uy,uz) -> (side,ux,uy)  [only x/y are used]
         std::vector<std::tuple<int,double,double>> diriGs, forceGs;
         for (const auto& d : diriSides)
             diriGs.emplace_back(std::get<0>(d), std::get<1>(d), std::get<2>(d));
@@ -258,7 +258,7 @@ int main() {
     iganet::init();
     iganet::verbose(std::cout);
 
-    // Repo-Wurzel bestimmen
+    // get repo root from build exe path
     std::filesystem::path repoRoot;
     try {
         repoRoot = repo_root_from_build_exe();
@@ -336,12 +336,12 @@ int main() {
         return 1;
     }
 
-    // Lamé-Parameter
+    // Lamé parameters
     const double lambda = (youngModulus * poissonRatio) /
                           ((1. + poissonRatio) * (1. - 2.*poissonRatio));
     const double mu     = youngModulus / (2. * (1. + poissonRatio));
 
-    // Geometriemodus aus Config bestimmen
+    // Determine geometry mode from the config
     GeometryMode geoMode = parseGeometryMode(j);
     std::cout << "[main] geometry.mode = "
               << (geoMode == GeometryMode::Xml ? "xml" : "parametric") << "\n";

@@ -65,20 +65,20 @@ int main() {
         // DEGREE = 4; // could be set dynamically too
 
         // boundary conditions
-        FORCE_SIDES.clear();    //inhomo neumann
+        FORCE_SIDES.clear();    // inhomogeneous Neumann
         for (const auto& fs : j["boundary_conditions"]["force_sides"]) {
             FORCE_SIDES.emplace_back(fs[0], fs[1], fs[2]);
         }
 
-        DIRI_SIDES.clear();     //inhomo homo dirichlet
+        DIRI_SIDES.clear();     // homogeneous / inhomogeneous Dirichlet
         for (const auto& ds : j["boundary_conditions"]["diri_sides"]) {
             DIRI_SIDES.emplace_back(ds[0], ds[1], ds[2]);
         }
 
-        TFBC_SIDES = j["boundary_conditions"]["tfbc_sides"].get<std::vector<int>>();    //homo neumann
+        TFBC_SIDES = j["boundary_conditions"]["tfbc_sides"].get<std::vector<int>>();    // homogeneous Neumann
 
         // body force
-        BODY_FORCE.first = j["body_force"][0];      //vorce
+        BODY_FORCE.first = j["body_force"][0];      // force
         BODY_FORCE.second = j["body_force"][1];
 
         // just to verify
@@ -216,7 +216,7 @@ int main() {
         << " seconds\n";
 
     // PostProcessing ----------------------------------------------------------------------------------------------------------
-    net.PostProc();     // rausschreiben der postprocessing größen
+    net.PostProc();     // write post-processing quantities
     net.save("/home/isabellaunix/DevelDA/singerDA/ConfigResult/trained_iganet.pt");     // save the state of the trained network to evaluate later
 
     //  get  geometry and displacement as tensors

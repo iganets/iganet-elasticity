@@ -49,6 +49,17 @@ def get_optional(d: dict, path: str, default):
     return cur
 
 
+def require_vector_length(values, expected_length: int, name: str):
+    if not isinstance(values, (list, tuple)):
+        raise ValueError(f"Config key '{name}' must be a list with {expected_length} entries.")
+    if len(values) != expected_length:
+        raise ValueError(
+            f"Config key '{name}' must have exactly {expected_length} entries, "
+            f"but has {len(values)}: {values}"
+        )
+    return values
+
+
 def _zero3():
     return np.zeros(3, dtype=float)
 
@@ -111,21 +122,22 @@ def main():
     degree = int(get_required(cfg, "spline.degree"))
 
     # --- Body force (3 components) ---
-    bf_raw     = get_required(cfg, "body_force")
+    bf_raw     = require_vector_length(get_required(cfg, "body_force"), 3, "body_force")
     body_force = (float(bf_raw[0]), float(bf_raw[1]), float(bf_raw[2]))
 
     # --- Boundary conditions ---
     bc_cfg = get_required(cfg, "boundary_conditions")
 
     # Each force/diri entry now has 4 values: [side, x, y, z]
-    force_sides = [
-        (int(s[0]), float(s[1]), float(s[2]), float(s[3]))
-        for s in get_optional(bc_cfg, "force_sides", [])
-    ]
-    diri_sides = [
-        (int(s[0]), float(s[1]), float(s[2]), float(s[3]))
-        for s in get_optional(bc_cfg, "diri_sides", [])
-    ]
+    force_sides = []
+    for i, side in enumerate(get_optional(bc_cfg, "force_sides", [])):
+        s = require_vector_length(side, 4, f"boundary_conditions.force_sides[{i}]")
+        force_sides.append((int(s[0]), float(s[1]), float(s[2]), float(s[3])))
+
+    diri_sides = []
+    for i, side in enumerate(get_optional(bc_cfg, "diri_sides", [])):
+        s = require_vector_length(side, 4, f"boundary_conditions.diri_sides[{i}]")
+        diri_sides.append((int(s[0]), float(s[1]), float(s[2]), float(s[3])))
     tfbc_sides = [int(s) for s in get_optional(bc_cfg, "tfbc_sides", [])]
 
     bc = _build_bc_config(force_sides, diri_sides, tfbc_sides)

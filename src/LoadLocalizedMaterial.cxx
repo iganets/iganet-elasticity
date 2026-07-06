@@ -43,7 +43,7 @@ int main() {
                                         line_search_fn("strong_wolfe");
 
     
-    std::string choice = "json";     // 'json' for json input. OPTIONAL .json input for easy change of params. no need to rebuild :) auszukommentieren, wenn nicht gebraucht.
+    std::string choice = "json";     // 'json' for JSON input. Comment out if not needed.
     
     
     if (choice == "json") {
@@ -64,17 +64,17 @@ int main() {
         // DEGREE = 4; // could be set dynamically too
 
         // boundary conditions
-        FORCE_SIDES.clear();    //inhomo neumann
+        FORCE_SIDES.clear();    // inhomogeneous Neumann
         for (const auto& fs : j["boundary_conditions"]["force_sides"]) {
             FORCE_SIDES.emplace_back(fs[0], fs[1], fs[2]);
         }
 
-        DIRI_SIDES.clear();     //inhomo homo dirichlet
+        DIRI_SIDES.clear();     // homogeneous / inhomogeneous Dirichlet
         for (const auto& ds : j["boundary_conditions"]["diri_sides"]) {
             DIRI_SIDES.emplace_back(ds[0], ds[1], ds[2]);
         }
 
-        TFBC_SIDES = j["boundary_conditions"]["tfbc_sides"].get<std::vector<int>>();    //homo neumann
+        TFBC_SIDES = j["boundary_conditions"]["tfbc_sides"].get<std::vector<int>>();    // homogeneous Neumann
 
         // body force
         BODY_FORCE.first = j["body_force"][0];
@@ -202,8 +202,8 @@ int main() {
     net2.eval();
 
     // POSTPROCESSING ----------------------------------------------------------------------------------------------------------
-    net2.epoch(0);      // um indizes zudefinieren. siehe func epoch
-    net2.PostProc();    // rausschreiben der postprocessing größen
+    net2.epoch(0);      // define indices first, see epoch()
+    net2.PostProc();    // write post-processing quantities
 
     //  get  geometry and displacement as tensors
     torch::Tensor geometryAsTensor = net2.template input<0>().as_tensor();

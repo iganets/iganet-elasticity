@@ -1,13 +1,13 @@
 #pragma once
 
-//  STRUKTURELLE ÄNDERUNGEN gegenüber dem Original:
+// Structural changes compared to the original:
 //
-//  1. initialize_problem_data()  [neu, öffentlich]
-//       Berechnet Kollokationspunkte und alle Index-Tensoren.
+//  1. initialize_problem_data()  [new, public]
+//       Precomputes collocation points and all index tensors.
 //
-//  2. PostProc()  [neu, öffentlich]
-//       Enthält den gesamten Postprocessing-Block, der im Original
-//       am Ende von loss() unter if(epoch == MAX_EPOCH_-1) stand.
+//  2. PostProc()  [new, public]
+//       Contains the full post-processing block that originally lived
+//       at the end of loss() under if(epoch == MAX_EPOCH_-1).
 
 #include "lin_elasticity_utils.hpp"
 #include <iganet.h>
@@ -25,7 +25,7 @@
 #include <tuple>
 #include <vector>
 
-/// @brief IgANet-Spezialisierung für lineare Elastizität in 3D
+/// @brief IgANet specialization for 3D linear elasticity.
 template <typename Optimizer, typename GeometryMap, typename Variable>
 class linear_elasticity
     : public iganet::IgANet<Optimizer, std::tuple<GeometryMap>, std::tuple<Variable>>,
@@ -40,7 +40,7 @@ private:
     typename Base::template collPts_t<0> collPts_;
     typename Base::template collPts_t<0> interiorCollPts_;
 
-    //  Vorberechnete Index-Tensoren für schnelle Jac/Hess-Auswertung
+    // Precomputed index tensors for fast Jacobian/Hessian evaluation.
  
     typename Customizable::template output_interior_knot_indices_t<0> var_knot_indices_;
     typename Customizable::template output_interior_coeff_indices_t<0> var_coeff_indices_;
@@ -61,26 +61,26 @@ private:
     typename Customizable::template input_interior_coeff_indices_t<0> G_coeff_indices_boundary_;
 
     
-    //  Materialparameter
+    // Material parameters.
    
-    double lambda_; ///< Lamé-Parameter λ
-    double mu_;     ///< Lamé-Parameter μ (Schubmodul)
+    double lambda_; ///< Lamé parameter lambda.
+    double mu_;     ///< Lamé parameter mu (shear modulus).
 
     typename std::tuple_element_t<0, Outputs> ref_;
 
-    //  Simulationsparameter
+    // Simulation parameters.
  
     int    MAX_EPOCH_;
     double MIN_LOSS_;
     int64_t NR_CTRL_PTS_;
 
-    std::array<double, 3> BODY_FORCE_; ///< Volumenkraft [fx, fy, fz]
+    std::array<double, 3> BODY_FORCE_; ///< Body force [fx, fy, fz].
 
-    /// Dirichlet-RB: (Seite, ux, uy, uz)
+    /// Dirichlet boundary conditions: (side, ux, uy, uz)
     std::vector<std::tuple<int, double, double, double>> DIRI_SIDES_;
-    /// Neumann-RB (aufgeprägte Traktionen): (Seite, tx, ty, tz)
+    /// Neumann boundary conditions / prescribed tractions: (side, tx, ty, tz)
     std::vector<std::tuple<int, double, double, double>> FORCE_SIDES_;
-    /// Traktionsfreie Seiten: Seitennummern
+    /// Traction-free sides as side numbers.
     std::vector<int> TFBC_SIDES_;
 
     std::string JSON_PATH_;
@@ -92,25 +92,27 @@ private:
 
     int nrCollPts_ = 0;
 
+    /// @brief Returns true if the given side has a Dirichlet condition.
     bool isDirichletSide(int sideNr) const {
         return std::any_of(DIRI_SIDES_.begin(), DIRI_SIDES_.end(),
             [&](const auto& t) { return std::get<0>(t) == sideNr; });
     }
 
+    /// @brief Returns true if the given side has a Neumann traction condition.
     bool isNeumannSide(int sideNr) const {
         return std::any_of(FORCE_SIDES_.begin(), FORCE_SIDES_.end(),
             [&](const auto& t) { return std::get<0>(t) == sideNr; });
     }
 
-    /// Priorität: 3=Dirichlet, 2=Neumann, 1=traktionsfrei
+    /// @brief Returns boundary-condition priority for conflict resolution at corners.
+    /// @details Priority order: Dirichlet = 3, Neumann = 2, traction-free = 1.
     int bc_priority(int sideNr) const {
         if (isDirichletSide(sideNr)) return 3;
         if (isNeumannSide(sideNr))   return 2;
         return 1;
     }
 
-    /// true wenn otherSide eine höhere oder gleichwertige Priorität besitzt
-    /// und damit Eckpunkte von sideNr "gewinnt"
+    /// @brief Returns true if another side wins a shared corner against sideNr.
     bool bc_other_wins(int otherSide, int sideNr) const {
         int op = bc_priority(otherSide);
         int tp = bc_priority(sideNr);
@@ -119,6 +121,7 @@ private:
         return false;
     }
 
+    /// @brief Returns true if two cube faces intersect geometrically.
     bool sidesIntersect(int a, int b) const {
         if (a == b) return false;
         return !((a==1&&b==2)||(a==2&&b==1)||
@@ -126,6 +129,7 @@ private:
                  (a==5&&b==6)||(a==6&&b==5));
     }
 
+    /// @brief Builds physical face coordinates for one boundary side.
     std::array<torch::Tensor, 3> getFaceBoundaryPoints(int sideNr) const {
         switch (sideNr) {
             case 1: { auto Y=std::get<0>(collPts_.second)[0];
@@ -151,6 +155,7 @@ private:
         }
     }
 
+    /// @brief Masks points that lie on a second boundary side.
     torch::Tensor maskPointsOnOtherSide(const std::array<torch::Tensor,3>& pts,
                                          int otherSide) const
     {
@@ -167,6 +172,7 @@ private:
         }
     }
 
+    /// @brief Keeps only boundary points owned by the given side after corner arbitration.
     torch::Tensor buildKeepMaskForSide(int sideNr) const {
         auto pts = getFaceBoundaryPoints(sideNr);
         torch::Tensor keepMask = torch::ones(
@@ -182,6 +188,7 @@ private:
         return keepMask;
     }
 
+    /// @brief Initializes cached traction collocation points for Neumann-type boundaries.
     void initTractionCollPts(const std::vector<int>& neumannSides,
                               const torch::TensorOptions& opts)
     {
@@ -219,7 +226,7 @@ private:
                 torch::empty({0}, opts)};
         }
 
-        // Indizes für Boundary-Auswertung vorberechnen
+        // Precompute indices for boundary evaluations.
         var_knot_indices_boundary_ =
             Base::template output<0>().template find_knot_indices<iganet::functionspace::interior>(
                 tractionCollPts_);
@@ -238,7 +245,7 @@ private:
 
 
 public:
-    
+    /// @brief Constructs the 3D linear-elasticity network wrapper.
     template <typename... Args>
     linear_elasticity(double lambda, double mu, bool SUPERVISED_LEARNING,
                       int MAX_EPOCH, double MIN_LOSS,
@@ -262,15 +269,17 @@ public:
         , SUPERVISED_LEARNING_(SUPERVISED_LEARNING)
     {}
 
+    /// @brief Returns the reference displacement field.
     auto const& ref() const { return ref_; }
+    /// @brief Returns the mutable reference displacement field.
     auto&       ref()       { return ref_; }
 
-
+    /// @brief Writes one result entry into the configured JSON output file.
     void appendToJsonFile(const std::string& key, const nlohmann::json& data) {
         ::appendToJsonFile(JSON_PATH_, key, data);
     }
 
-
+    /// @brief Precomputes collocation points and knot/coefficient index caches.
     void initialize_problem_data() {
         Base::inputs(0);
         collPts_         = Base::template collPts<0>(iganet::collPts::greville);
@@ -326,12 +335,13 @@ public:
         }
     }
 
+    /// @brief Epoch callback used for lightweight logging.
     bool epoch(int64_t epoch) override {
         std::cout << "Epoch: " << epoch << std::endl;
         return epoch == 0;
     }
 
-
+    /// @brief Computes the training loss for either supervised or unsupervised mode.
     torch::Tensor loss(const torch::Tensor& outputs, int64_t epoch) override {
 
         this->template output<0>().from_tensor(outputs);
@@ -342,7 +352,7 @@ public:
         std::optional<torch::Tensor> forceValues, targetForce;
         std::optional<torch::Tensor> tractionFreeValues, tractionZeros;
 
-        //  TRAKTIONS-/NEUMANN-RANDBEDINGUNGEN
+        // Traction / Neumann boundary conditions.
       
         if (!TFBC_SIDES_.empty() || !FORCE_SIDES_.empty()) {
 
@@ -497,7 +507,7 @@ public:
                                    *b_side[0],*b_side[1],*b_side[2], sNr);
         };
 
-        //  UNSUPERVISED LEARNING
+        // Unsupervised learning.
   
         if (!SUPERVISED_LEARNING_) {
             std::ostringstream log;
@@ -540,7 +550,7 @@ public:
                       << " = " << log.str() << std::endl;
         }
 
-        //  SUPERVISED LEARNING
+        // Supervised learning.
 
         else if (SUPERVISED_LEARNING_) {
             std::ostringstream log;
@@ -602,9 +612,10 @@ public:
         return totalLoss;
     }
 
+    /// @brief Exports derived stresses, displaced collocation points, and residual fields.
     void PostProc() {
 
-        // Jacobian an ALLEN Kollokationspunkten
+        // Jacobian at all collocation points.
         auto jacobian = this->template output<0>().ijac(
             this->template input<0>(), collPts_.first,
             var_knot_indices_,  var_coeff_indices_,
@@ -616,7 +627,7 @@ public:
 
         const int64_t nPts = jacobian[0]->size(0);
 
-        // Spannungstensoren
+        // Stress tensor components.
         torch::Tensor sigma_xx = torch::zeros({nPts});
         torch::Tensor sigma_xy = torch::zeros({nPts});
         torch::Tensor sigma_xz = torch::zeros({nPts});
@@ -631,7 +642,7 @@ public:
         nlohmann::json netZStresses_j  = nlohmann::json::array();
 
         for (int i = 0; i < nPts; ++i) {
-            // Hooke'sches Gesetz (isotrope lineare Elastizität)
+            // Hooke's law for isotropic linear elasticity.
             sigma_xx[i] = lambda_*(ux_x[i]+uy_y[i]+uz_z[i]) + 2.*mu_*ux_x[i];
             sigma_xy[i] = mu_*(uy_x[i]+ux_y[i]);
             sigma_xz[i] = mu_*(uz_x[i]+ux_z[i]);
@@ -639,7 +650,7 @@ public:
             sigma_yz[i] = mu_*(uz_y[i]+uy_z[i]);
             sigma_zz[i] = lambda_*(ux_x[i]+uy_y[i]+uz_z[i]) + 2.*mu_*uz_z[i];
 
-            // Von-Mises-Vergleichsspannung
+            // Von Mises equivalent stress.
             sigma_vm[i] = sqrt(0.5*(
                 (sigma_xx[i]-sigma_yy[i])*(sigma_xx[i]-sigma_yy[i]) +
                 (sigma_yy[i]-sigma_zz[i])*(sigma_yy[i]-sigma_zz[i]) +
@@ -657,7 +668,7 @@ public:
         appendToJsonFile("net_YStresses",  netYStresses_j);
         appendToJsonFile("net_ZStresses",  netZStresses_j);
 
-        // Kollokationspunkte: Referenz- und verformte Position
+        // Collocation points: reference and deformed positions.
         torch::Tensor cpRef = torch::stack(
             {std::get<0>(collPts_.first),
              std::get<1>(collPts_.first),
@@ -682,7 +693,7 @@ public:
         appendToJsonFile("net_collPtsFirstAfterDisplacementAsTensor",
                          collPtsFirstDispl_j);
 
-        // Divergenz des Spannungstensors (Residuumsanalyse)
+        // Stress divergence for residual analysis.
         auto hessianColl = this->template output<0>().ihess(
             this->template input<0>(), interiorCollPts_.first,
             var_knot_indices_interior_, var_coeff_indices_interior_,
@@ -722,7 +733,7 @@ public:
 
 
 #ifdef IGANET_WITH_GISMO
-    /// @brief GISMO-Referenzsimulation (unverändert aus dem Original)
+    /// @brief Runs the original GISMO-based 2D reference simulation.
     static std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> RunGismoSimulation(
         int64_t NR_CTRL_PTS, int DEGREE, double YOUNG_MODULUS, double POISSON_RATIO,
         const std::vector<std::tuple<int,double,double>>& DIRI_SIDES,

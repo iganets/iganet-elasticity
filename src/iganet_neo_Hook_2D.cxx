@@ -178,7 +178,7 @@ public:
     }
   }
 
-  /// @brief helper function to calculate the Greville abscissae ; and geom?
+  /// @brief helper function to calculate the Greville abscissae
   static std::vector<double> computeGrevilleAbscissae(const gsKnotVector<double>& knotVector, int degree, int numCtrlPts) {
       std::vector<double> greville(numCtrlPts, 0.0);
       

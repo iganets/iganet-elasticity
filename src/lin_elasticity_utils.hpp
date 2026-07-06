@@ -1,16 +1,16 @@
 #pragma once
 
 // =============================================================================
-//  Hilfsfunktionen und Datentypen ohne iganet-Abhängigkeit
-//  Wird von lin_elasticity_net.hpp und iganet_lin_elasticity_3D.cxx eingebunden
+// Helper functions and data types without IgANet dependencies.
+// Included by lin_elasticity_net.hpp and iganet_lin_elasticity_3D.cxx.
 //
-//  Wichtigste Funktionen:
-//    1. GeometryMode          – wählt XML- oder parametrische Geometrie
-//    2. appendToJsonFile()    – Schreibt einen Key sofort in eine JSON-Datei
-//    3. loadDisplacements()   – Liest "stdCollDisplacement" als (N,3)-Tensor
-//    4. loadXmlKnotVectors()  – Liest Knotenvektoren aus gismo-XML
-//    5. makeUniformKnotVector()– Erzeugt uniformen, offenen B-Spline-KV
-//    6. computeGrevilleAbscissae() – Greville-Abszissen eines B-Spline-Raums
+// Main utilities:
+//   1. GeometryMode             - selects XML or parametric geometry input
+//   2. appendToJsonFile()       - writes a single key into a JSON file
+//   3. loadDisplacements()      - loads "stdCollDisplacement" as an (N,3) tensor
+//   4. loadXmlKnotVectors()     - reads knot vectors from a G+Smo XML file
+//   5. makeUniformKnotVector()  - creates a uniform open B-spline knot vector
+//   6. computeGrevilleAbscissae() - computes Greville abscissae of a B-spline space
 // =============================================================================
 
 #include <pugixml.hpp>
@@ -27,14 +27,14 @@
 #include <vector>
 
 enum class GeometryMode {
-    Xml,        ///< Knotenvektoren + Kontrollpunkte aus gismo-XML-Datei
-    Parametric  ///< Uniformer Einheitswürfel, definiert über sim_config.json
+    Xml,        ///< Knot vectors and control points loaded from a G+Smo XML file.
+    Parametric  ///< Uniform unit cube defined via sim_config.json.
 };
 
-/// Liest "geometry.mode" aus einem JSON-Objekt.
-/// Wirft std::runtime_error wenn der Wert unbekannt ist.
+/// @brief Parses geometry.mode from the JSON configuration.
+/// @throws std::runtime_error if the mode string is unknown.
 inline GeometryMode parseGeometryMode(const nlohmann::json& j) {
-    // Rückwärtskompatibel: fehlt das Feld, wird XML angenommen
+    // Backward compatible: default to XML if the field is missing.
     if (!j.contains("geometry") || !j["geometry"].contains("mode")) {
         return GeometryMode::Xml;
     }
@@ -45,7 +45,7 @@ inline GeometryMode parseGeometryMode(const nlohmann::json& j) {
         "Unbekannter geometry.mode: '" + mode + "'. Erlaubt: 'xml', 'parametric'.");
 }
 
-
+/// @brief Appends or overwrites a single JSON key in the target file.
 inline void appendToJsonFile(const std::string&    jsonPath,
                               const std::string&    key,
                               const nlohmann::json& data)
@@ -86,14 +86,10 @@ inline void appendToJsonFile(const std::string&    jsonPath,
     }
 }
 
-//  loadDisplacements
-//
-//  Liest "stdCollDisplacement" aus einer JSON-Datei und gibt einen
-//  CPU-Double-Tensor der Form (N, 3) zurück.
-//
-//  Erwartet JSON-Format:
-//    { "stdCollDisplacement": [[ux0,uy0,uz0], [ux1,uy1,uz1], ...] }
-
+/// @brief Loads stdCollDisplacement from JSON as a CPU double tensor of shape (N, 3).
+///
+/// Expected JSON format:
+/// { "stdCollDisplacement": [[ux0, uy0, uz0], [ux1, uy1, uz1], ...] }
 inline torch::Tensor loadDisplacements(const std::string& jsonPath) {
     auto options = torch::TensorOptions().dtype(torch::kDouble).device(torch::kCPU);
 
@@ -118,24 +114,20 @@ inline torch::Tensor loadDisplacements(const std::string& jsonPath) {
     return result;
 }
 
-
-// loadXmlKnotVectors
-//
-//  Liest die drei B-Spline-Knotenvektoren (u/v/w) aus einer XML-Datei.
-
 struct XmlGeometryData {
-    pugi::xml_document            doc;          ///< geladenes XML-Dokument (für from_xml)
+    pugi::xml_document            doc;          ///< Loaded XML document used by from_xml.
     std::array<std::vector<double>, 3> knotVectors; ///< KV[0]=u, KV[1]=v, KV[2]=w
-    int64_t                       nCtrlPts = 0; ///< Kontrollpunkte pro Richtung
+    int64_t                       nCtrlPts = 0; ///< Number of control points per direction.
 };
 
+/// @brief Loads the three tensor-product knot vectors from a G+Smo XML geometry.
 inline XmlGeometryData loadXmlKnotVectors(const std::filesystem::path& xmlPath,
                                            const char* geomId = "100",
                                            int         degree = 2)
 {
     XmlGeometryData result;
 
-    // XML-Datei laden
+    // Load XML file.
     if (!result.doc.load_file(xmlPath.c_str())) {
         throw std::runtime_error(
             "Could not load geometry from XML: " + xmlPath.string());
@@ -185,7 +177,7 @@ inline XmlGeometryData loadXmlKnotVectors(const std::filesystem::path& xmlPath,
     result.nCtrlPts =
         static_cast<int64_t>(result.knotVectors[0].size()) - degree - 1;
 
-    // Debug-Ausgabe
+    // Debug output.
     std::cout << "\n=== KNOT VECTOR DEBUG ===\n";
     std::cout << "Geometry id=" << geomId << "\n";
     for (int d = 0; d < 3; ++d) {
@@ -199,7 +191,7 @@ inline XmlGeometryData loadXmlKnotVectors(const std::filesystem::path& xmlPath,
     return result;
 }
 
-
+/// @brief Creates a uniform open knot vector for the given spline size and degree.
 inline std::vector<double> makeUniformKnotVector(int nCtrlPts, int degree) {
     const int nKnots = nCtrlPts + degree + 1;
     const int nInner = nKnots - 2 * (degree + 1);
@@ -215,12 +207,8 @@ inline std::vector<double> makeUniformKnotVector(int nCtrlPts, int degree) {
     return kv;
 }
 
-
-//computeGrevilleAbscissae
-//
-//  Berechnet die Greville-Abszissen für einen B-Spline-Raum:
-//    g_i = (t_{i+1} + ... + t_{i+degree}) / degree
-
+/// @brief Computes Greville abscissae for a B-spline basis.
+/// @details g_i = (t_{i+1} + ... + t_{i+degree}) / degree
 inline std::vector<double> computeGrevilleAbscissae(
     const std::vector<double>& knotVector, int degree, int numCtrlPts)
 {
