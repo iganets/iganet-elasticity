@@ -3,3 +3,5 @@ og*
 build/
 result.json
 std_collocation_python/__pycache__/
+/__pycache__/
+.codex

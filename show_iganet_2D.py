@@ -42,10 +42,6 @@ def nr_ctrlpts_1d_from_flat(ctrlpts, key):
 
 """ PREPARE DATA """
 
-import json
-import numpy as np
-import splinepy
-
 # read data
 with open("result.json", "r") as file:
     data = json.load(file)

@@ -219,7 +219,7 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                 mat_coeff_indices_interior_ =
                     Base::template input<2>().template find_coeff_indices<iganet::functionspace::interior>(mat_knot_indices_interior_);
                                 
-                // // --- u_ --- sol vorher bitte deklarieren
+                // // --- u_ --- declare solution variables beforehand
                 // u_knot_indices_ =
                 //     Base::template output<0>().template find_knot_indices<iganet::functionspace::interior>(collPts_.first);
                 // u_coeff_indices_ =
@@ -485,7 +485,7 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                         };
                     }
 
-                    u_knot_indices_Nbdr_ =     // vormals _boundary (!)
+                    u_knot_indices_Nbdr_ =     // formerly named _boundary (!)
                         Base::template output<0>().template find_knot_indices<iganet::functionspace::interior>(tractionCollPts);        // boundary vs interior.
                     u_coeff_indices_Nbdr_ =
                         Base::template output<0>().template find_coeff_indices<iganet::functionspace::interior>(u_knot_indices_Nbdr_);
@@ -522,7 +522,7 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                     int n_vals = nrCollPts_ - intersecCtr[sideCtr];
 
                     for (int i = 0; i < n_vals; ++i) {
-                        int idx = pointCtr + i;     //11 oder 12 it. 0 bis 12?
+                        int idx = pointCtr + i;     // 11 or 12 iterations? 0 to 12?
 
                         double matLambda_temp = mat(0)[idx].template item<double>();
                         double matMu_temp     = mat(1)[idx].template item<double>();
@@ -634,7 +634,7 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                 auto Mm_y = Jacobian_mat(1,1);
 
             // calculation of  DIV STRESS of  stress tensor, this is what we're trying to minimize
-            for (int i = 0; i < Hessian(0,0,0).size(0); ++i) {      // 36 it über interior 
+            for (int i = 0; i < Hessian(0,0,0).size(0); ++i) {      // 36 iterations over the interior
 
                 double matLambda_temp = mat(0)[i].template item<double>();
                 double matMu_temp     = mat(1)[i].template item<double>();
@@ -680,7 +680,7 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                     // load  displacements from  matlab solution
                     torch::Tensor matlabDisplacements_ = loadDisplacements();
 
-                    // supervised loss: MSE gegen matlab-Kontrollpunkte
+                    // supervised loss: MSE against MATLAB control points
                     gsLoss = 1e9 * torch::mse_loss(netDisplacements_, matlabDisplacements_);
 
                     // add  supervised loss to  total loss
@@ -733,13 +733,13 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                         switch (sideNr) {
                             case 1:
                                 *bcLoss += bcWeight * 
-                                    (torch::mse_loss(*std::get<0>(u_Dbdr)[0], *std::get<0>(ref_Dbdr)[0]) +      // seite 1 x (links)  0
-                                    torch::mse_loss(*std::get<0>(u_Dbdr)[1], *std::get<0>(ref_Dbdr)[1]));       // seite 1 y (rechts) 0
+                                    (torch::mse_loss(*std::get<0>(u_Dbdr)[0], *std::get<0>(ref_Dbdr)[0]) +      // side 1 x (left) 0
+                                    torch::mse_loss(*std::get<0>(u_Dbdr)[1], *std::get<0>(ref_Dbdr)[1]));       // side 1 y (right) 0
                                 break;
                             case 2:
                                 *bcLoss += bcWeight * 
-                                    (torch::mse_loss(*std::get<1>(u_Dbdr)[0], *std::get<1>(ref_Dbdr)[0]) +      // seite 2 x (links)  0.5
-                                    torch::mse_loss(*std::get<1>(u_Dbdr)[1], *std::get<1>(ref_Dbdr)[1]));       // seite 2 y (rechts) 0
+                                    (torch::mse_loss(*std::get<1>(u_Dbdr)[0], *std::get<1>(ref_Dbdr)[0]) +      // side 2 x (left) 0.5
+                                    torch::mse_loss(*std::get<1>(u_Dbdr)[1], *std::get<1>(ref_Dbdr)[1]));       // side 2 y (right) 0
                                 break;
                             case 3:
                                 *bcLoss += bcWeight * 
@@ -810,7 +810,7 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
                 auto Mm_y = Jacobian_mat(1,1);
 
             // calculation of DIV STRESS divergence of  stress tensor
-            for (int i = 0; i < Hessian(0,0,0).size(0); ++i) {      // 36 it über interior 
+            for (int i = 0; i < Hessian(0,0,0).size(0); ++i) {      // 36 iterations over the interior
 
                 double matLambda_temp = matINT(0)[i].template item<double>();
                 double matMu_temp     = matINT(1)[i].template item<double>();
@@ -862,7 +862,7 @@ class ElasticityForLocalizedMaterial : public iganet::IgANet2<Optimizer, Inputs,
             auto mat = Base::template input<2>().eval(collPts_.first);
 
             // calculate  stress tensor
-            for (int i = 0; i < Jacobian[0]->size(0); ++i) {        // 64 it über gesamte domain
+            for (int i = 0; i < Jacobian[0]->size(0); ++i) {        // 64 iterations over the full domain
 
                 double matLambda_temp = mat(0)[i].template item<double>();
                 double matMu_temp     = mat(1)[i].template item<double>();
