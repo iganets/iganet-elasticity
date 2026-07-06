@@ -63,6 +63,13 @@ struct PatchInterfaceConfig {
     int side_b = 0;
 };
 
+struct TopDisplacementConfig {
+    bool enabled = true;
+    double value = 1.0;
+    int patch = -1;
+    int side = -1;
+};
+
 struct ItdPatch {
     int id = 0;
     std::array<int64_t, 3> ncoeffs{0, 0, 0};
@@ -554,6 +561,15 @@ double face_max_z(const ItdPatch& patch, int side) {
     return maxZ;
 }
 
+double face_average_z(const ItdPatch& patch, int side) {
+    const auto face = face_coefficients(patch, side);
+    double sumZ = 0.0;
+    for (const auto& point : face) {
+        sumZ += point[2];
+    }
+    return sumZ / static_cast<double>(face.size());
+}
+
 std::array<double, 2> global_z_range(const std::vector<ItdPatch>& patches) {
     double minZ = std::numeric_limits<double>::infinity();
     double maxZ = -std::numeric_limits<double>::infinity();
@@ -570,7 +586,8 @@ std::array<double, 2> global_z_range(const std::vector<ItdPatch>& patches) {
 
 std::vector<PatchConfig> make_patch_configs(const std::vector<ItdPatch>& patches,
                                             const std::vector<PatchInterfaceConfig>& interfaces,
-                                            double bottomTolerance) {
+                                            double bottomTolerance,
+                                            const TopDisplacementConfig& topDisplacement) {
     const auto zRange = global_z_range(patches);
     std::vector<PatchConfig> configs;
     configs.reserve(patches.size());
@@ -593,6 +610,52 @@ std::vector<PatchConfig> make_patch_configs(const std::vector<ItdPatch>& patches
         }
 
         configs.push_back(std::move(config));
+    }
+
+    if (topDisplacement.enabled) {
+        int targetPatch = topDisplacement.patch;
+        int targetSide = topDisplacement.side;
+
+        if (targetPatch < 0 || targetSide < 0) {
+            double bestMinZ = -std::numeric_limits<double>::infinity();
+            double bestAverageZ = -std::numeric_limits<double>::infinity();
+
+            for (std::size_t p = 0; p < configs.size(); ++p) {
+                for (const int side : configs[p].boundary_conditions.tfbc_sides) {
+                    const double minZ = face_min_z(patches[p], side);
+                    const double averageZ = face_average_z(patches[p], side);
+                    if (minZ > bestMinZ ||
+                        (std::abs(minZ - bestMinZ) <= bottomTolerance &&
+                         averageZ > bestAverageZ)) {
+                        bestMinZ = minZ;
+                        bestAverageZ = averageZ;
+                        targetPatch = static_cast<int>(p);
+                        targetSide = side;
+                    }
+                }
+            }
+        }
+
+        if (targetPatch < 0 || targetPatch >= static_cast<int>(configs.size()) ||
+            targetSide < 1 || targetSide > 6) {
+            throw std::runtime_error("Could not determine top displacement boundary face.");
+        }
+
+        auto& tfbc = configs[static_cast<std::size_t>(targetPatch)]
+                         .boundary_conditions.tfbc_sides;
+        const auto it = std::find(tfbc.begin(), tfbc.end(), targetSide);
+        if (it == tfbc.end()) {
+            throw std::runtime_error(
+                "Configured top displacement face is not an exterior traction-free face.");
+        }
+        tfbc.erase(it);
+        configs[static_cast<std::size_t>(targetPatch)]
+            .boundary_conditions.diri_sides.push_back(
+                {targetSide, 0.0, 0.0, topDisplacement.value});
+
+        std::cout << "Top displacement Dirichlet: patch " << targetPatch
+                  << ", side " << targetSide
+                  << ", u=(0,0," << topDisplacement.value << ")\n";
     }
 
     return configs;
@@ -1071,19 +1134,14 @@ private:
 
         std::map<std::array<long long, 3>, std::vector<ControlPointRef>> byPosition;
 
-        auto add_face_refs = [&](int patch, int side) {
-            const auto indices = face_control_point_indices(patches_.at(patch).ncoeffs, side);
-            for (const auto localIndex : indices) {
+        for (std::size_t patchIndex = 0; patchIndex < patches_.size(); ++patchIndex) {
+            const auto& patch = patches_.at(patchIndex);
+            const auto n = patch.ncoeffs[0] * patch.ncoeffs[1] * patch.ncoeffs[2];
+            for (int64_t localIndex = 0; localIndex < n; ++localIndex) {
                 byPosition[control_point_key(
-                    geometryTensors.at(static_cast<std::size_t>(patch)),
-                    patches_.at(patch), localIndex)]
-                    .push_back({patch, localIndex});
+                    geometryTensors.at(patchIndex), patch, localIndex)]
+                    .push_back({static_cast<int>(patchIndex), localIndex});
             }
-        };
-
-        for (const auto& cfg : interfaces_) {
-            add_face_refs(cfg.patch_a, cfg.side_a);
-            add_face_refs(cfg.patch_b, cfg.side_b);
         }
 
         strongCouplingGroups_.clear();
@@ -1098,7 +1156,13 @@ private:
                 return a.patch == b.patch && a.local_index == b.local_index;
             }), refs.end());
 
-            if (refs.size() > 1) {
+            const auto firstPatch = refs.front().patch;
+            const bool crossesPatches = std::any_of(
+                refs.begin(), refs.end(), [&](const auto& ref) {
+                    return ref.patch != firstPatch;
+                });
+
+            if (refs.size() > 1 && crossesPatches) {
                 strongCouplingGroups_.push_back(refs);
             }
         }
@@ -1111,6 +1175,56 @@ private:
         std::cout << "Strong C0 coupling: " << strongCouplingGroups_.size()
                   << " control-point groups, " << coupledRefs
                   << " patch-local references." << std::endl;
+    }
+
+    void build_strong_dirichlet_values() {
+        strongDirichletValues_.clear();
+        strongDirichletValues_.resize(patches_.size());
+
+        auto assign_value = [&](int patchIndex, int component, int64_t localIndex,
+                                double value) {
+            auto& values = strongDirichletValues_.at(static_cast<std::size_t>(patchIndex))
+                               .at(static_cast<std::size_t>(component));
+            const auto [it, inserted] = values.emplace(localIndex, value);
+            if (!inserted && std::abs(it->second - value) > 1e-12) {
+                throw std::runtime_error(
+                    "Conflicting strong Dirichlet values on the same control point.");
+            }
+        };
+
+        std::size_t constrainedDofs = 0;
+        for (std::size_t patchIndex = 0; patchIndex < patches_.size(); ++patchIndex) {
+            const auto& patch = patches_[patchIndex];
+            for (const auto& side : patch.boundary_conditions.diri_sides) {
+                const auto indices = face_control_point_indices(patch.ncoeffs, side.side);
+                for (const auto localIndex : indices) {
+                    assign_value(static_cast<int>(patchIndex), 0, localIndex, side.x);
+                    assign_value(static_cast<int>(patchIndex), 1, localIndex, side.y);
+                    assign_value(static_cast<int>(patchIndex), 2, localIndex, side.z);
+                    constrainedDofs += 3;
+                }
+            }
+        }
+
+        std::cout << "Strong Dirichlet constraints: " << constrainedDofs
+                  << " patch-local component DOFs." << std::endl;
+    }
+
+    std::optional<double> prescribed_dirichlet_value(const ControlPointRef& ref,
+                                                     int component) const {
+        if (ref.patch < 0 ||
+            static_cast<std::size_t>(ref.patch) >= strongDirichletValues_.size()) {
+            return std::nullopt;
+        }
+
+        const auto& values =
+            strongDirichletValues_[static_cast<std::size_t>(ref.patch)]
+                                  [static_cast<std::size_t>(component)];
+        const auto it = values.find(ref.local_index);
+        if (it == values.end()) {
+            return std::nullopt;
+        }
+        return it->second;
     }
 
     template <std::size_t PatchA, std::size_t PatchB>
@@ -1155,18 +1269,38 @@ private:
     void enforce_strong_coupling(std::vector<torch::Tensor>& patchTensors) const {
         for (const auto& group : strongCouplingGroups_) {
             for (int component = 0; component < 3; ++component) {
-                std::vector<torch::Tensor> values;
-                values.reserve(group.size());
-
+                std::optional<double> prescribedValue;
                 for (const auto& ref : group) {
-                    const auto& patch = patches_.at(static_cast<std::size_t>(ref.patch));
-                    const auto n = patch.ncoeffs[0] * patch.ncoeffs[1] * patch.ncoeffs[2];
-                    values.push_back(patchTensors.at(static_cast<std::size_t>(ref.patch))
-                                         .slice(0, component * n + ref.local_index,
-                                                component * n + ref.local_index + 1));
+                    const auto value = prescribed_dirichlet_value(ref, component);
+                    if (!value.has_value()) {
+                        continue;
+                    }
+                    if (prescribedValue.has_value() &&
+                        std::abs(*prescribedValue - *value) > 1e-12) {
+                        throw std::runtime_error(
+                            "Conflicting strong Dirichlet values in one coupling group.");
+                    }
+                    prescribedValue = *value;
                 }
 
-                auto average = torch::stack(values).mean().reshape({1});
+                torch::Tensor coupledValue;
+                if (prescribedValue.has_value()) {
+                    coupledValue = torch::full(
+                        {1}, *prescribedValue, patchTensors.front().options());
+                } else {
+                    std::vector<torch::Tensor> values;
+                    values.reserve(group.size());
+
+                    for (const auto& ref : group) {
+                        const auto& patch = patches_.at(static_cast<std::size_t>(ref.patch));
+                        const auto n = patch.ncoeffs[0] * patch.ncoeffs[1] * patch.ncoeffs[2];
+                        values.push_back(patchTensors.at(static_cast<std::size_t>(ref.patch))
+                                             .slice(0, component * n + ref.local_index,
+                                                    component * n + ref.local_index + 1));
+                    }
+
+                    coupledValue = torch::stack(values).mean().reshape({1});
+                }
 
                 for (const auto& ref : group) {
                     const auto& patch = patches_.at(static_cast<std::size_t>(ref.patch));
@@ -1174,34 +1308,45 @@ private:
                     patchTensors.at(static_cast<std::size_t>(ref.patch))
                         .slice(0, component * n + ref.local_index,
                                component * n + ref.local_index + 1)
-                        .copy_(average);
+                        .copy_(coupledValue);
                 }
             }
         }
     }
 
     void enforce_strong_dirichlet(std::vector<torch::Tensor>& patchTensors) const {
-        for (std::size_t patchIndex = 0; patchIndex < patches_.size(); ++patchIndex) {
+        for (std::size_t patchIndex = 0; patchIndex < strongDirichletValues_.size(); ++patchIndex) {
             const auto& patch = patches_[patchIndex];
             const auto n = patch.ncoeffs[0] * patch.ncoeffs[1] * patch.ncoeffs[2];
 
-            for (const auto& side : patch.boundary_conditions.diri_sides) {
-                const auto indices = face_control_point_indices(patch.ncoeffs, side.side);
+            for (int component = 0; component < 3; ++component) {
+                const auto& values = strongDirichletValues_[patchIndex]
+                                                         [static_cast<std::size_t>(component)];
+                if (values.empty()) {
+                    continue;
+                }
+
+                std::vector<int64_t> indices;
+                std::vector<double> prescribed;
+                indices.reserve(values.size());
+                prescribed.reserve(values.size());
+                for (const auto& [localIndex, value] : values) {
+                    indices.push_back(localIndex);
+                    prescribed.push_back(value);
+                }
+
                 const torch::Tensor indexTensor = torch::tensor(
                     indices,
                     torch::TensorOptions()
                         .dtype(torch::kInt64)
                         .device(patchTensors[patchIndex].device()));
+                const torch::Tensor valueTensor = torch::tensor(
+                    prescribed,
+                    patchTensors[patchIndex].options());
 
                 patchTensors[patchIndex]
-                    .slice(0, 0, n)
-                    .index_put_({indexTensor}, side.x);
-                patchTensors[patchIndex]
-                    .slice(0, n, 2 * n)
-                    .index_put_({indexTensor}, side.y);
-                patchTensors[patchIndex]
-                    .slice(0, 2 * n, 3 * n)
-                    .index_put_({indexTensor}, side.z);
+                    .slice(0, component * n, (component + 1) * n)
+                    .index_put_({indexTensor}, valueTensor);
             }
         }
     }
@@ -1361,6 +1506,7 @@ private:
     std::vector<PatchInterfaceConfig> interfaces_;
     std::vector<InterfaceOrderCache> interfaceOrderCaches_;
     std::vector<std::vector<ControlPointRef>> strongCouplingGroups_;
+    std::vector<std::array<std::map<int64_t, double>, 3>> strongDirichletValues_;
     std::array<PatchCache, NumPatches> patchCaches_;
     torch::Tensor bodyForceRow_;
     int maxEpoch_ = 0;
@@ -1409,6 +1555,7 @@ public:
             load_patch_geometry<Patch>(patches.at(Patch));
         });
         deviceName_ = patch_input<0>().as_tensor().device().str();
+        build_strong_dirichlet_values();
         build_strong_coupling_groups();
     }
 
@@ -1687,9 +1834,11 @@ int main() {
     double poissonRatio = 0.3;
     int maxEpoch = 50;
     double minLoss = 1e-10;
-    std::string optimizerName = "lbfgs";
+    std::string optimizerName = "adamw";
     double learningRate = 1e-3;
-    std::array<double, 3> bodyForce{0.0, 0.0, -100.0};
+    bool useBodyForce = false;
+    std::array<double, 3> bodyForce{0.0, 0.0, 0.0};
+    TopDisplacementConfig topDisplacement;
 
     try {
         if (config.contains("material")) {
@@ -1709,8 +1858,27 @@ int main() {
             if (config["simulation"].contains("learning_rate")) {
                 learningRate = config["simulation"]["learning_rate"].get<double>();
             }
+            if (config["simulation"].contains("use_body_force")) {
+                useBodyForce = config["simulation"]["use_body_force"].get<bool>();
+            }
+            if (config["simulation"].contains("use_top_displacement")) {
+                topDisplacement.enabled =
+                    config["simulation"]["use_top_displacement"].get<bool>();
+            }
+            if (config["simulation"].contains("top_displacement")) {
+                topDisplacement.value =
+                    config["simulation"]["top_displacement"].get<double>();
+            }
+            if (config["simulation"].contains("top_displacement_patch")) {
+                topDisplacement.patch =
+                    config["simulation"]["top_displacement_patch"].get<int>();
+            }
+            if (config["simulation"].contains("top_displacement_side")) {
+                topDisplacement.side =
+                    config["simulation"]["top_displacement_side"].get<int>();
+            }
         }
-        if (config.contains("body_force")) {
+        if (useBodyForce && config.contains("body_force")) {
             const auto& bf = require(config, "body_force");
             if (bf.size() == 3) {
                 bodyForce = {
@@ -1763,7 +1931,8 @@ int main() {
     const auto interfaces = discover_interfaces(itdPatches);
     const auto zRange = global_z_range(itdPatches);
     const double bottomTolerance = std::max(1e-8, 1e-6 * std::abs(zRange[1] - zRange[0]));
-    const auto patchConfigs = make_patch_configs(itdPatches, interfaces, bottomTolerance);
+    const auto patchConfigs = make_patch_configs(
+        itdPatches, interfaces, bottomTolerance, topDisplacement);
 
     std::cout << "Loaded " << itdPatches.size() << " ITD patches from "
               << geometryPath << "\n"
@@ -1773,9 +1942,17 @@ int main() {
     nlohmann::json patchBcJson = nlohmann::json::array();
     nlohmann::json patchMetaJson = nlohmann::json::array();
     for (const auto& patch : patchConfigs) {
+        nlohmann::json diriSides = nlohmann::json::array();
+        for (const auto& side : patch.boundary_conditions.diri_sides) {
+            diriSides.push_back({
+                {"side", side.side},
+                {"value", {side.x, side.y, side.z}}
+            });
+        }
         patchBcJson.push_back({
             {"id", patch.id},
             {"diri_sides", patch.boundary_conditions.diri_sides.size()},
+            {"diri_side_values", diriSides},
             {"tfbc_sides", patch.boundary_conditions.tfbc_sides.size()}
         });
     }
@@ -1790,6 +1967,12 @@ int main() {
     append_json_key(resultPath.string(), "geometry_file", geometryPath.string());
     append_json_key(resultPath.string(), "patch_boundary_summary", patchBcJson);
     append_json_key(resultPath.string(), "net_PatchMeta", patchMetaJson);
+    append_json_key(resultPath.string(), "load_case", {
+        {"use_body_force", useBodyForce},
+        {"body_force", {bodyForce[0], bodyForce[1], bodyForce[2]}},
+        {"use_top_displacement", topDisplacement.enabled},
+        {"top_displacement", topDisplacement.value}
+    });
 
     const double lambda = (youngModulus * poissonRatio) /
                           ((1.0 + poissonRatio) * (1.0 - 2.0 * poissonRatio));

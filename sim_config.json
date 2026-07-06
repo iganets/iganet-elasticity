@@ -1,7 +1,12 @@
 {
   "simulation": {
-    "max_epoch": 50,
+    "max_epoch": 2000,
     "min_loss": 1e-6,
+    "optimizer": "adamw",
+    "learning_rate": 0.001,
+    "use_body_force": false,
+    "use_top_displacement": true,
+    "top_displacement": 10.0,
     "supervised_learning": false
   },
   "reference_simulation": {
@@ -11,7 +16,7 @@
     "degree_ref": 4
   },
   "material": {
-    "young_modulus": 210.0,
+    "young_modulus": 21.0,
     "poisson_ratio": 0.25
   },
   "spline": {
@@ -39,10 +44,8 @@
       },
       "boundary_conditions": {
         "force_sides": [],
-        "diri_sides": [
-          [2, 0.1, 0.0]
-        ],
-        "tfbc_sides": [3, 4]
+        "diri_sides": [],
+        "tfbc_sides": [2, 3, 4]
       }
     }
   ],
@@ -55,5 +58,5 @@
       "orientation": "aligned"
     }
   ],
-  "body_force": [0.0, 0.0]
+  "body_force": [0.0, 0.0, 0.0]
 }
