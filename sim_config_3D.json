@@ -14,6 +14,9 @@
     "young_modulus": 210.0,
     "poisson_ratio": 0.25
   },
+  "geometry": {
+    "mode": "parametric"
+  },
   "spline": {
     "nr_ctrl_pts": 8,
     "degree": 4
