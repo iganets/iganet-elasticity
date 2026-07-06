@@ -18,22 +18,25 @@ using iganet_elasticity::utils::config::require;
 
 template <int DEGREE>
 int run(
-    const std::filesystem::path& repoRoot,
-    const std::filesystem::path& xmlPath,
-    const std::filesystem::path& resultJsonPath,
-    GeometryMode                 geoMode,
-    const nlohmann::json&        j,
-    double lambda, double mu,
-    bool   supervisedLearning,
-    int    maxEpoch, double minLoss,
-    std::array<double,3>                              bodyForce,
-    std::vector<int>                                  tfbcSides,
-    std::vector<std::tuple<int,double,double,double>> forceSides,
-    std::vector<std::tuple<int,double,double,double>> diriSides,
-    int64_t                                           nrCtrlPts,
-    int                                               degreeRef,
-    bool                                              runGsRefSim,
-    double youngModulus, double poissonRatio)
+    const std::filesystem::path&                        repoRoot,
+    const std::filesystem::path&                        xmlPath,
+    const std::filesystem::path&                        resultJsonPath,
+    GeometryMode                                        geoMode,
+    const nlohmann::json&                               j,
+    double                                              lambda, 
+    double                                              mu,
+    bool                                                supervisedLearning,
+    int                                                 maxEpoch, 
+    double                                              minLoss,
+    std::array<double,3>                                bodyForce,
+    std::vector<int>                                    tfbcSides,
+    std::vector<std::tuple<int,double,double,double>>   forceSides,
+    std::vector<std::tuple<int,double,double,double>>   diriSides,
+    int64_t                                             nrCtrlPts,
+    int                                                 degreeRef,
+    bool                                                runGsRefSim,
+    double                                              youngModulus,
+    double                                              poissonRatio)
 {
     using real_t      = double;
     using optimizer_t = torch::optim::LBFGS;
@@ -168,7 +171,7 @@ int run(
     net.initialize_problem_data();
 
     auto t1 = std::chrono::high_resolution_clock::now();
-    // net.train();
+    net.train();
     auto t2 = std::chrono::high_resolution_clock::now();
     iganet::Log(iganet::log::info)
         << "Training took "
@@ -269,7 +272,6 @@ int main() {
 
     const auto CONFIG_PATH  = repoRoot / "sim_config_3D.json";
     const auto RESULT_PATH  = repoRoot / "result.json";
-    const auto XML_PATH     = repoRoot / "bone_simplified.xml";
 
     std::ifstream cfgFile(CONFIG_PATH);
     if (!cfgFile) {
@@ -336,39 +338,50 @@ int main() {
         return 1;
     }
 
+    const GeometryMode geoMode = parseGeometryMode(j);
+
+    std::filesystem::path xmlPath = repoRoot / "bone_simplified.xml";
+    if (geoMode == GeometryMode::Xml &&
+        j.contains("geometry") &&
+        j["geometry"].contains("xml_path")) {
+        const auto xmlPathCfg = j["geometry"]["xml_path"].get<std::string>();
+        xmlPath = std::filesystem::path(xmlPathCfg);
+        if (xmlPath.is_relative()) {
+            xmlPath = repoRoot / xmlPath;
+        }
+    }
+
     // Lamé parameters
     const double lambda = (youngModulus * poissonRatio) /
                           ((1. + poissonRatio) * (1. - 2.*poissonRatio));
     const double mu     = youngModulus / (2. * (1. + poissonRatio));
 
-    // Determine geometry mode from the config
-    GeometryMode geoMode = parseGeometryMode(j);
     std::cout << "[main] geometry.mode = "
               << (geoMode == GeometryMode::Xml ? "xml" : "parametric") << "\n";
 
 
     switch (degreeCfg) {
-        case 2: return run<2>(repoRoot, XML_PATH, RESULT_PATH, geoMode, j,
+        case 2: return run<2>(repoRoot, xmlPath, RESULT_PATH, geoMode, j,
                               lambda, mu, supervisedLearning, maxEpoch, minLoss,
                               bodyForce, tfbcSides, forceSides, diriSides,
                               nrCtrlPts, degreeRef, runGsRefSim,
                               youngModulus, poissonRatio);
-        case 3: return run<3>(repoRoot, XML_PATH, RESULT_PATH, geoMode, j,
+        case 3: return run<3>(repoRoot, xmlPath, RESULT_PATH, geoMode, j,
                               lambda, mu, supervisedLearning, maxEpoch, minLoss,
                               bodyForce, tfbcSides, forceSides, diriSides,
                               nrCtrlPts, degreeRef, runGsRefSim,
                               youngModulus, poissonRatio);
-        case 4: return run<4>(repoRoot, XML_PATH, RESULT_PATH, geoMode, j,
+        case 4: return run<4>(repoRoot, xmlPath, RESULT_PATH, geoMode, j,
                               lambda, mu, supervisedLearning, maxEpoch, minLoss,
                               bodyForce, tfbcSides, forceSides, diriSides,
                               nrCtrlPts, degreeRef, runGsRefSim,
                               youngModulus, poissonRatio);
-        case 5: return run<5>(repoRoot, XML_PATH, RESULT_PATH, geoMode, j,
+        case 5: return run<5>(repoRoot, xmlPath, RESULT_PATH, geoMode, j,
                               lambda, mu, supervisedLearning, maxEpoch, minLoss,
                               bodyForce, tfbcSides, forceSides, diriSides,
                               nrCtrlPts, degreeRef, runGsRefSim,
                               youngModulus, poissonRatio);
-        case 6: return run<6>(repoRoot, XML_PATH, RESULT_PATH, geoMode, j,
+        case 6: return run<6>(repoRoot, xmlPath, RESULT_PATH, geoMode, j,
                               lambda, mu, supervisedLearning, maxEpoch, minLoss,
                               bodyForce, tfbcSides, forceSides, diriSides,
                               nrCtrlPts, degreeRef, runGsRefSim,
