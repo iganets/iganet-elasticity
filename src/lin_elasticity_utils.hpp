@@ -28,7 +28,7 @@
 
 enum class GeometryMode {
     Xml,        ///< Knot vectors and control points loaded from a G+Smo XML file.
-    Parametric  ///< Uniform unit cube defined via sim_config.json.
+    Parametric  ///< Uniform unit cube defined via a dimension-specific sim_config file.
 };
 
 /// @brief Parses geometry.mode from the JSON configuration.

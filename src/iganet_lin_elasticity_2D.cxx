@@ -1089,7 +1089,7 @@ int main() {
         return 1;
     }
 
-    const std::filesystem::path CONFIG_PATH = repo_root / "sim_config.json";
+    const std::filesystem::path CONFIG_PATH = repo_root / "sim_config_2D.json";
     const std::filesystem::path RESULT_JSON_PATH = repo_root / "result.json";  // output file
 
     // load config
@@ -1109,7 +1109,7 @@ int main() {
 
     // run standard collocation simulation with the parameters from the config file 
     const std::string cmd =
-        "cd \"" + repo_root.string() + "\" && python3 run_std_coll.py";
+        "cd \"" + repo_root.string() + "\" && python3 run_std_coll.py sim_config_2D.json";
 
     const int ret = std::system(cmd.c_str());
     if (ret != 0) {

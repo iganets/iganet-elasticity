@@ -21,10 +21,10 @@
   "boundary_conditions": {
     "force_sides": [],
     "diri_sides": [
-      [1, 0.0, 0.0, 0.0],
-      [2, 1.0, 0.0, 0.0]
+      [1, 0.0, 0.0],
+      [2, 0.1, 0.0]
     ],
-    "tfbc_sides": [3, 4, 5, 6]
+    "tfbc_sides": [3, 4]
   },
-  "body_force": [0.0, 0.0, 0.0]
+  "body_force": [0.0, 0.0]
 }

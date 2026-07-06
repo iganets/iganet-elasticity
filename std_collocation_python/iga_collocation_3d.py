@@ -5,7 +5,7 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
 
 from .bspline import greville_abscissae, bspline_all_basis_and_ders
-from .mapping3d import mapping3d
+from .mapping_3d import mapping3d
 from .apply_bc_3d import apply_bc_3d, BC, BCConfig3D
 
 
@@ -214,15 +214,15 @@ def solve_elasticity_collocation_3d(
     )
     return u, v, w_sol, sigma_vm, meta
     
-# # std_collocation_python/iga_collocation.py
+# # std_collocation_python/iga_collocation_2d.py
 # from __future__ import annotations
 # import numpy as np
 # from scipy.sparse import coo_matrix
 # from scipy.sparse.linalg import spsolve
 
 # from .bspline import greville_abscissae, bspline_all_basis_and_ders
-# from .mapping2d import mapping2d
-# from .apply_bc import apply_bc, BC, BCConfig
+# from .mapping_2d import mapping2d
+# from .apply_bc_2d import apply_bc, BC, BCConfig
 
 
 # def open_uniform_knots(ncp: int, degree: int) -> np.ndarray:

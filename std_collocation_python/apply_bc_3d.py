@@ -248,7 +248,7 @@ def apply_bc_3d(i: int, j: int, k: int,
 
 
 
-# # std_collocation_python/apply_bc.py
+# # std_collocation_python/apply_bc_2d.py
 # from __future__ import annotations
 # from dataclasses import dataclass
 # import numpy as np
