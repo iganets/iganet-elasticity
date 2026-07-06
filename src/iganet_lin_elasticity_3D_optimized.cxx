@@ -267,7 +267,7 @@ int main() {
         return 1;
     }
 
-    const auto CONFIG_PATH  = repoRoot / "sim_config.json";
+    const auto CONFIG_PATH  = repoRoot / "sim_config_3D.json";
     const auto RESULT_PATH  = repoRoot / "result.json";
     const auto XML_PATH     = repoRoot / "bone_simplified.xml";
 
@@ -285,7 +285,7 @@ int main() {
     }
 
     const std::string cmd =
-        "cd \"" + repoRoot.string() + "\" && python3 run_std_coll.py";
+        "cd \"" + repoRoot.string() + "\" && python3 run_std_coll.py sim_config_3D.json";
     const int ret = std::system(cmd.c_str());
     if (ret != 0) {
         std::cerr << "ERROR: python reference run failed. system() returned "

@@ -1,0 +1,30 @@
+{
+  "simulation": {
+    "max_epoch": 100,
+    "min_loss": 1e-6,
+    "supervised_learning": false
+  },
+  "reference_simulation": {
+    "run_gs_ref_sim": false,
+    "run_coll_ref_sim": false,
+    "nr_ctrl_pts_ref": 64,
+    "degree_ref": 4
+  },
+  "material": {
+    "young_modulus": 210.0,
+    "poisson_ratio": 0.25
+  },
+  "spline": {
+    "nr_ctrl_pts": 8,
+    "degree": 4
+  },
+  "boundary_conditions": {
+    "force_sides": [],
+    "diri_sides": [
+      [1, 0.0, 0.0, 0.0],
+      [2, 0.1, 0.0, 0.0]
+    ],
+    "tfbc_sides": [3, 4, 5, 6]
+  },
+  "body_force": [0.0, 0.0, 0.0]
+}
