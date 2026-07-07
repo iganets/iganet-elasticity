@@ -1,6 +1,6 @@
 {
   "simulation": {
-    "max_epoch": 100,
+    "max_epoch": 20,
     "min_loss": 1e-6,
     "supervised_learning": false
   },

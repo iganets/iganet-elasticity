@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -16,7 +17,8 @@ using namespace iganet::literals;
 using iganet_elasticity::utils::paths::repo_root_from_build_exe;
 using iganet_elasticity::utils::config::require;
 
-template <int DEGREE>
+template <int DEGREE, typename GeometrySpline, typename VariableSpline,
+          typename GeometrySpaceSpec, typename VariableSpaceSpec>
 int run(
     const std::filesystem::path&                        repoRoot,
     const std::filesystem::path&                        xmlPath,
@@ -37,39 +39,18 @@ int run(
     int                                                 degreeRef,
     bool                                                runGsRefSim,
     double                                              youngModulus,
-    double                                              poissonRatio)
+    double                                              poissonRatio,
+    GeometrySpaceSpec&&                                 geometrySpaceSpec,
+    VariableSpaceSpec&&                                 variableSpaceSpec,
+    const XmlGeometryData*                              xmlDataPtr = nullptr)
 {
     using real_t      = double;
     using optimizer_t = torch::optim::LBFGS;
-    using geometry_t  = iganet::S<iganet::NonUniformBSpline<real_t, 3, DEGREE, DEGREE, DEGREE>>;
-    using variable_t  = iganet::S<iganet::NonUniformBSpline<real_t, 3, DEGREE, DEGREE, DEGREE>>;
+    using geometry_t  = iganet::S<GeometrySpline>;
+    using variable_t  = iganet::S<VariableSpline>;
     using net_t       = linear_elasticity<optimizer_t, geometry_t, variable_t>;
 
     const std::string jsonPath = resultJsonPath.string();
-
-    std::array<std::vector<real_t>, 3> knotVectors;
-    XmlGeometryData xmlData;   // empty in parametric mode
-
-    if (geoMode == GeometryMode::Xml) {
-
-        // --- XML mode: load knot vectors and control points from file ---
-        xmlData = loadXmlKnotVectors(xmlPath, "100", DEGREE);
-        knotVectors = xmlData.knotVectors;
-        nrCtrlPts   = xmlData.nCtrlPts;  // overrides the config value
-
-    } else {
-
-        // --- Parametric mode: uniform unit cube ---
-        // Take nr_ctrl_pts from the geometry block if present, otherwise from the spline block.
-        if (j.contains("geometry") && j["geometry"].contains("nr_ctrl_pts"))
-            nrCtrlPts = j["geometry"]["nr_ctrl_pts"].get<int64_t>();
-
-        for (int d = 0; d < 3; ++d)
-            knotVectors[d] = makeUniformKnotVector(static_cast<int>(nrCtrlPts), DEGREE);
-
-        std::cout << "[Parametric] nrCtrlPts=" << nrCtrlPts
-                  << "  knot-vector length=" << knotVectors[0].size() << "\n";
-    }
 
     const auto netOptions = iganet::Options<real_t>{}.device(computeDevice);
 
@@ -81,8 +62,8 @@ int run(
         {{iganet::activation::sigmoid},
          {iganet::activation::sigmoid},
          {iganet::activation::none}},
-        std::make_tuple(std::make_tuple(knotVectors)),  // geometry
-        std::make_tuple(std::make_tuple(knotVectors)),  // variable
+        std::forward<GeometrySpaceSpec>(geometrySpaceSpec),
+        std::forward<VariableSpaceSpec>(variableSpaceSpec),
         iganet::init::greville,
         iganet::IgANetOptions{},
         netOptions);
@@ -90,7 +71,11 @@ int run(
     if (geoMode == GeometryMode::Xml) {
 
         // Load control points and knot vectors from XML
-        net.template input<0>().from_xml(xmlData.doc, 0);
+        if (!xmlDataPtr) {
+            std::cerr << "Error: XML geometry requested without loaded XML data.\n";
+            return 1;
+        }
+        net.template input<0>().from_xml(xmlDataPtr->doc, 0);
 
     } else {
 
@@ -109,16 +94,29 @@ int run(
                           gj["scale"][2].get<double>()};
         }
 
-        net.template input<0>().transform(
-            [origin, scale](const std::array<real_t,3>& xi) -> std::array<real_t,3> {
-                return {origin[0] + scale[0]*xi[0],
-                        origin[1] + scale[1]*xi[1],
-                        origin[2] + scale[2]*xi[2]};
-            });
+        const auto knotVector = makeUniformKnotVector(static_cast<int>(nrCtrlPts), DEGREE);
+        const auto greville   = computeGrevilleAbscissae(knotVector, DEGREE, static_cast<int>(nrCtrlPts));
+        const int64_t nPts    = nrCtrlPts * nrCtrlPts * nrCtrlPts;
+
+        auto geomTensor = torch::zeros({3 * nPts}, net.template input<0>().as_tensor().options());
+
+        int64_t idx = 0;
+        for (int64_t k = 0; k < nrCtrlPts; ++k) {
+            for (int64_t jv = 0; jv < nrCtrlPts; ++jv) {
+                for (int64_t i = 0; i < nrCtrlPts; ++i, ++idx) {
+                    geomTensor[idx]          = origin[0] + scale[0] * greville[static_cast<std::size_t>(i)];
+                    geomTensor[idx + nPts]   = origin[1] + scale[1] * greville[static_cast<std::size_t>(jv)];
+                    geomTensor[idx + 2*nPts] = origin[2] + scale[2] * greville[static_cast<std::size_t>(k)];
+                }
+            }
+        }
+
+        net.template input<0>().from_tensor(geomTensor);
 
         std::cout << "[Parametric] Geometry set:"
                   << "  origin=(" << origin[0] << "," << origin[1] << "," << origin[2] << ")"
-                  << "  scale=(" << scale[0] << "," << scale[1] << "," << scale[2] << ")\n";
+                  << "  scale=(" << scale[0] << "," << scale[1] << "," << scale[2] << ")"
+                  << "  using Greville control points\n";
     }
 
   
@@ -188,11 +186,16 @@ int run(
     net.PostProc();
 
     torch::Tensor geomTensor = net.template input<0>().as_tensor();
+    torch::Tensor dispTensor = net.template output<0>().as_tensor();
     int64_t totalSize = geomTensor.size(0);
 
     if (totalSize % 3 != 0) {
         std::cerr << "Error: Geometry tensor size not divisible by 3 (size="
                   << totalSize << ")\n";
+        return 1;
+    }
+    if (dispTensor.size(0) != totalSize) {
+        std::cerr << "Error: Displacement tensor size does not match geometry tensor size.\n";
         return 1;
     }
     int64_t nCtrlPtsXml = totalSize / 3;
@@ -210,19 +213,30 @@ int run(
     std::cout << "===========================\n";
 
     torch::Tensor netCtrlPts = torch::zeros({nCtrlPtsXml, 3}, geomTensor.options());
+    torch::Tensor netDisplacements = torch::zeros({nCtrlPtsXml, 3}, geomTensor.options());
     for (int64_t i = 0; i < nCtrlPtsXml; ++i) {
-        netCtrlPts[i][0] = geomTensor[i].item<double>();
-        netCtrlPts[i][1] = geomTensor[i + nCtrlPtsXml].item<double>();
-        netCtrlPts[i][2] = geomTensor[i + 2*nCtrlPtsXml].item<double>();
+        netDisplacements[i][0] = dispTensor[i].item<double>();
+        netDisplacements[i][1] = dispTensor[i + nCtrlPtsXml].item<double>();
+        netDisplacements[i][2] = dispTensor[i + 2*nCtrlPtsXml].item<double>();
+
+        netCtrlPts[i][0] = geomTensor[i].item<double>() + netDisplacements[i][0].item<double>();
+        netCtrlPts[i][1] = geomTensor[i + nCtrlPtsXml].item<double>() + netDisplacements[i][1].item<double>();
+        netCtrlPts[i][2] = geomTensor[i + 2*nCtrlPtsXml].item<double>() + netDisplacements[i][2].item<double>();
     }
 
     nlohmann::json netCtrlPts_j = nlohmann::json::array();
+    nlohmann::json netDispl_j   = nlohmann::json::array();
     for (int64_t i = 0; i < netCtrlPts.size(0); ++i)
         netCtrlPts_j.push_back({netCtrlPts[i][0].item<double>(),
                                  netCtrlPts[i][1].item<double>(),
                                  netCtrlPts[i][2].item<double>()});
+    for (int64_t i = 0; i < netDisplacements.size(0); ++i)
+        netDispl_j.push_back({netDisplacements[i][0].item<double>(),
+                              netDisplacements[i][1].item<double>(),
+                              netDisplacements[i][2].item<double>()});
 
     net.appendToJsonFile("net_CtrlPts",          netCtrlPts_j);
+    net.appendToJsonFile("net_Displacements",    netDispl_j);
     net.appendToJsonFile("net_nrCtrlPtsFromXml",  nCtrlPtsXml);
     net.appendToJsonFile("net_Degree",            DEGREE);
 
@@ -302,14 +316,15 @@ int main() {
     }
 
   
-    double youngModulus = 0., poissonRatio = 0.;
-    int    maxEpoch     = 0;
-    double minLoss      = 0.;
-    bool   supervisedLearning = false;
-    int64_t nrCtrlPts   = 0;
-    int     degreeCfg   = 0;
-    bool    runGsRefSim = false;
-    int     degreeRef   = 0;
+    double  youngModulus        = 0.;
+    double  poissonRatio        = 0.;
+    int     maxEpoch            = 0;
+    double  minLoss             = 0.;
+    bool    supervisedLearning  = false;
+    int64_t nrCtrlPts           = 0;
+    int     degreeCfg           = 0;
+    bool    runGsRefSim         = false;
+    int     degreeRef           = 0;
 
     std::vector<std::tuple<int,double,double,double>> forceSides, diriSides;
     std::vector<int>     tfbcSides;
@@ -370,33 +385,121 @@ int main() {
     std::cout << "[main] compute device = "
               << (computeDevice.is_cuda() ? "CUDA" : "CPU") << "\n";
 
+    std::optional<XmlGeometryData> xmlData;
+    if (geoMode == GeometryMode::Xml) {
+        xmlData.emplace(loadXmlKnotVectors(xmlPath, "100", degreeCfg));
+        nrCtrlPts = xmlData->nCtrlPts;
+    } else if (j.contains("geometry") && j["geometry"].contains("nr_ctrl_pts")) {
+        nrCtrlPts = j["geometry"]["nr_ctrl_pts"].get<int64_t>();
+    }
+
 
     switch (degreeCfg) {
-        case 2: return run<2>(repoRoot, xmlPath, RESULT_PATH, computeDevice, geoMode, j,
-                              lambda, mu, supervisedLearning, maxEpoch, minLoss,
-                              bodyForce, tfbcSides, forceSides, diriSides,
-                              nrCtrlPts, degreeRef, runGsRefSim,
-                              youngModulus, poissonRatio);
-        case 3: return run<3>(repoRoot, xmlPath, RESULT_PATH, computeDevice, geoMode, j,
-                              lambda, mu, supervisedLearning, maxEpoch, minLoss,
-                              bodyForce, tfbcSides, forceSides, diriSides,
-                              nrCtrlPts, degreeRef, runGsRefSim,
-                              youngModulus, poissonRatio);
-        case 4: return run<4>(repoRoot, xmlPath, RESULT_PATH, computeDevice, geoMode, j,
-                              lambda, mu, supervisedLearning, maxEpoch, minLoss,
-                              bodyForce, tfbcSides, forceSides, diriSides,
-                              nrCtrlPts, degreeRef, runGsRefSim,
-                              youngModulus, poissonRatio);
-        case 5: return run<5>(repoRoot, xmlPath, RESULT_PATH, computeDevice, geoMode, j,
-                              lambda, mu, supervisedLearning, maxEpoch, minLoss,
-                              bodyForce, tfbcSides, forceSides, diriSides,
-                              nrCtrlPts, degreeRef, runGsRefSim,
-                              youngModulus, poissonRatio);
-        case 6: return run<6>(repoRoot, xmlPath, RESULT_PATH, computeDevice, geoMode, j,
-                              lambda, mu, supervisedLearning, maxEpoch, minLoss,
-                              bodyForce, tfbcSides, forceSides, diriSides,
-                              nrCtrlPts, degreeRef, runGsRefSim,
-                              youngModulus, poissonRatio);
+        case 2:
+            if (geoMode == GeometryMode::Xml) {
+                using spline_t = iganet::NonUniformBSpline<double, 3, 2, 2, 2>;
+                return run<2, spline_t, spline_t>(
+                    repoRoot, xmlPath, RESULT_PATH, computeDevice, geoMode, j,
+                    lambda, mu, supervisedLearning, maxEpoch, minLoss,
+                    bodyForce, tfbcSides, forceSides, diriSides,
+                    nrCtrlPts, degreeRef, runGsRefSim, youngModulus, poissonRatio,
+                    std::make_tuple(std::make_tuple(xmlData->knotVectors)),
+                    std::make_tuple(std::make_tuple(xmlData->knotVectors)),
+                    &*xmlData);
+            } else {
+                using spline_t = iganet::UniformBSpline<double, 3, 2, 2, 2>;
+                return run<2, spline_t, spline_t>(
+                    repoRoot, xmlPath, RESULT_PATH, computeDevice, geoMode, j,
+                    lambda, mu, supervisedLearning, maxEpoch, minLoss,
+                    bodyForce, tfbcSides, forceSides, diriSides,
+                    nrCtrlPts, degreeRef, runGsRefSim, youngModulus, poissonRatio,
+                    std::tuple(iganet::utils::to_array(nrCtrlPts, nrCtrlPts, nrCtrlPts)),
+                    std::tuple(iganet::utils::to_array(nrCtrlPts, nrCtrlPts, nrCtrlPts)));
+            }
+        case 3:
+            if (geoMode == GeometryMode::Xml) {
+                using spline_t = iganet::NonUniformBSpline<double, 3, 3, 3, 3>;
+                return run<3, spline_t, spline_t>(
+                    repoRoot, xmlPath, RESULT_PATH, computeDevice, geoMode, j,
+                    lambda, mu, supervisedLearning, maxEpoch, minLoss,
+                    bodyForce, tfbcSides, forceSides, diriSides,
+                    nrCtrlPts, degreeRef, runGsRefSim, youngModulus, poissonRatio,
+                    std::make_tuple(std::make_tuple(xmlData->knotVectors)),
+                    std::make_tuple(std::make_tuple(xmlData->knotVectors)),
+                    &*xmlData);
+            } else {
+                using spline_t = iganet::UniformBSpline<double, 3, 3, 3, 3>;
+                return run<3, spline_t, spline_t>(
+                    repoRoot, xmlPath, RESULT_PATH, computeDevice, geoMode, j,
+                    lambda, mu, supervisedLearning, maxEpoch, minLoss,
+                    bodyForce, tfbcSides, forceSides, diriSides,
+                    nrCtrlPts, degreeRef, runGsRefSim, youngModulus, poissonRatio,
+                    std::tuple(iganet::utils::to_array(nrCtrlPts, nrCtrlPts, nrCtrlPts)),
+                    std::tuple(iganet::utils::to_array(nrCtrlPts, nrCtrlPts, nrCtrlPts)));
+            }
+        case 4:
+            if (geoMode == GeometryMode::Xml) {
+                using spline_t = iganet::NonUniformBSpline<double, 3, 4, 4, 4>;
+                return run<4, spline_t, spline_t>(
+                    repoRoot, xmlPath, RESULT_PATH, computeDevice, geoMode, j,
+                    lambda, mu, supervisedLearning, maxEpoch, minLoss,
+                    bodyForce, tfbcSides, forceSides, diriSides,
+                    nrCtrlPts, degreeRef, runGsRefSim, youngModulus, poissonRatio,
+                    std::make_tuple(std::make_tuple(xmlData->knotVectors)),
+                    std::make_tuple(std::make_tuple(xmlData->knotVectors)),
+                    &*xmlData);
+            } else {
+                using spline_t = iganet::UniformBSpline<double, 3, 4, 4, 4>;
+                return run<4, spline_t, spline_t>(
+                    repoRoot, xmlPath, RESULT_PATH, computeDevice, geoMode, j,
+                    lambda, mu, supervisedLearning, maxEpoch, minLoss,
+                    bodyForce, tfbcSides, forceSides, diriSides,
+                    nrCtrlPts, degreeRef, runGsRefSim, youngModulus, poissonRatio,
+                    std::tuple(iganet::utils::to_array(nrCtrlPts, nrCtrlPts, nrCtrlPts)),
+                    std::tuple(iganet::utils::to_array(nrCtrlPts, nrCtrlPts, nrCtrlPts)));
+            }
+        case 5:
+            if (geoMode == GeometryMode::Xml) {
+                using spline_t = iganet::NonUniformBSpline<double, 3, 5, 5, 5>;
+                return run<5, spline_t, spline_t>(
+                    repoRoot, xmlPath, RESULT_PATH, computeDevice, geoMode, j,
+                    lambda, mu, supervisedLearning, maxEpoch, minLoss,
+                    bodyForce, tfbcSides, forceSides, diriSides,
+                    nrCtrlPts, degreeRef, runGsRefSim, youngModulus, poissonRatio,
+                    std::make_tuple(std::make_tuple(xmlData->knotVectors)),
+                    std::make_tuple(std::make_tuple(xmlData->knotVectors)),
+                    &*xmlData);
+            } else {
+                using spline_t = iganet::UniformBSpline<double, 3, 5, 5, 5>;
+                return run<5, spline_t, spline_t>(
+                    repoRoot, xmlPath, RESULT_PATH, computeDevice, geoMode, j,
+                    lambda, mu, supervisedLearning, maxEpoch, minLoss,
+                    bodyForce, tfbcSides, forceSides, diriSides,
+                    nrCtrlPts, degreeRef, runGsRefSim, youngModulus, poissonRatio,
+                    std::tuple(iganet::utils::to_array(nrCtrlPts, nrCtrlPts, nrCtrlPts)),
+                    std::tuple(iganet::utils::to_array(nrCtrlPts, nrCtrlPts, nrCtrlPts)));
+            }
+        case 6:
+            if (geoMode == GeometryMode::Xml) {
+                using spline_t = iganet::NonUniformBSpline<double, 3, 6, 6, 6>;
+                return run<6, spline_t, spline_t>(
+                    repoRoot, xmlPath, RESULT_PATH, computeDevice, geoMode, j,
+                    lambda, mu, supervisedLearning, maxEpoch, minLoss,
+                    bodyForce, tfbcSides, forceSides, diriSides,
+                    nrCtrlPts, degreeRef, runGsRefSim, youngModulus, poissonRatio,
+                    std::make_tuple(std::make_tuple(xmlData->knotVectors)),
+                    std::make_tuple(std::make_tuple(xmlData->knotVectors)),
+                    &*xmlData);
+            } else {
+                using spline_t = iganet::UniformBSpline<double, 3, 6, 6, 6>;
+                return run<6, spline_t, spline_t>(
+                    repoRoot, xmlPath, RESULT_PATH, computeDevice, geoMode, j,
+                    lambda, mu, supervisedLearning, maxEpoch, minLoss,
+                    bodyForce, tfbcSides, forceSides, diriSides,
+                    nrCtrlPts, degreeRef, runGsRefSim, youngModulus, poissonRatio,
+                    std::tuple(iganet::utils::to_array(nrCtrlPts, nrCtrlPts, nrCtrlPts)),
+                    std::tuple(iganet::utils::to_array(nrCtrlPts, nrCtrlPts, nrCtrlPts)));
+            }
         default:
             std::cerr << "Error: Invalid degree " << degreeCfg << " (2..6)\n";
             return 1;
