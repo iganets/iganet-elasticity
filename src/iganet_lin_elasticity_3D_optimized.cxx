@@ -21,6 +21,7 @@ int run(
     const std::filesystem::path&                        repoRoot,
     const std::filesystem::path&                        xmlPath,
     const std::filesystem::path&                        resultJsonPath,
+    torch::Device                                       computeDevice,
     GeometryMode                                        geoMode,
     const nlohmann::json&                               j,
     double                                              lambda, 
@@ -70,6 +71,8 @@ int run(
                   << "  knot-vector length=" << knotVectors[0].size() << "\n";
     }
 
+    const auto netOptions = iganet::Options<real_t>{}.device(computeDevice);
+
     net_t net(
         lambda, mu, supervisedLearning, maxEpoch, minLoss,
         bodyForce, tfbcSides, forceSides, diriSides,
@@ -79,7 +82,10 @@ int run(
          {iganet::activation::sigmoid},
          {iganet::activation::none}},
         std::make_tuple(std::make_tuple(knotVectors)),  // geometry
-        std::make_tuple(std::make_tuple(knotVectors))); // variable
+        std::make_tuple(std::make_tuple(knotVectors)),  // variable
+        iganet::init::greville,
+        iganet::IgANetOptions{},
+        netOptions);
 
     if (geoMode == GeometryMode::Xml) {
 
@@ -339,6 +345,9 @@ int main() {
     }
 
     const GeometryMode geoMode = parseGeometryMode(j);
+    const torch::Device computeDevice =
+        torch::cuda::is_available() ? torch::Device(torch::kCUDA)
+                                    : torch::Device(torch::kCPU);
 
     std::filesystem::path xmlPath = repoRoot / "bone_simplified.xml";
     if (geoMode == GeometryMode::Xml &&
@@ -358,30 +367,32 @@ int main() {
 
     std::cout << "[main] geometry.mode = "
               << (geoMode == GeometryMode::Xml ? "xml" : "parametric") << "\n";
+    std::cout << "[main] compute device = "
+              << (computeDevice.is_cuda() ? "CUDA" : "CPU") << "\n";
 
 
     switch (degreeCfg) {
-        case 2: return run<2>(repoRoot, xmlPath, RESULT_PATH, geoMode, j,
+        case 2: return run<2>(repoRoot, xmlPath, RESULT_PATH, computeDevice, geoMode, j,
                               lambda, mu, supervisedLearning, maxEpoch, minLoss,
                               bodyForce, tfbcSides, forceSides, diriSides,
                               nrCtrlPts, degreeRef, runGsRefSim,
                               youngModulus, poissonRatio);
-        case 3: return run<3>(repoRoot, xmlPath, RESULT_PATH, geoMode, j,
+        case 3: return run<3>(repoRoot, xmlPath, RESULT_PATH, computeDevice, geoMode, j,
                               lambda, mu, supervisedLearning, maxEpoch, minLoss,
                               bodyForce, tfbcSides, forceSides, diriSides,
                               nrCtrlPts, degreeRef, runGsRefSim,
                               youngModulus, poissonRatio);
-        case 4: return run<4>(repoRoot, xmlPath, RESULT_PATH, geoMode, j,
+        case 4: return run<4>(repoRoot, xmlPath, RESULT_PATH, computeDevice, geoMode, j,
                               lambda, mu, supervisedLearning, maxEpoch, minLoss,
                               bodyForce, tfbcSides, forceSides, diriSides,
                               nrCtrlPts, degreeRef, runGsRefSim,
                               youngModulus, poissonRatio);
-        case 5: return run<5>(repoRoot, xmlPath, RESULT_PATH, geoMode, j,
+        case 5: return run<5>(repoRoot, xmlPath, RESULT_PATH, computeDevice, geoMode, j,
                               lambda, mu, supervisedLearning, maxEpoch, minLoss,
                               bodyForce, tfbcSides, forceSides, diriSides,
                               nrCtrlPts, degreeRef, runGsRefSim,
                               youngModulus, poissonRatio);
-        case 6: return run<6>(repoRoot, xmlPath, RESULT_PATH, geoMode, j,
+        case 6: return run<6>(repoRoot, xmlPath, RESULT_PATH, computeDevice, geoMode, j,
                               lambda, mu, supervisedLearning, maxEpoch, minLoss,
                               bodyForce, tfbcSides, forceSides, diriSides,
                               nrCtrlPts, degreeRef, runGsRefSim,
