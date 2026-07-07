@@ -113,10 +113,6 @@ int run(
 
         net.template input<0>().from_tensor(geomTensor);
 
-        std::cout << "[Parametric] Geometry set:"
-                  << "  origin=(" << origin[0] << "," << origin[1] << "," << origin[2] << ")"
-                  << "  scale=(" << scale[0] << "," << scale[1] << "," << scale[2] << ")"
-                  << "  using Greville control points\n";
     }
 
   
@@ -200,18 +196,6 @@ int run(
     }
     int64_t nCtrlPtsXml = totalSize / 3;
 
-    // Debug output
-    std::cout << "\n=== CONTROL POINT DEBUG ===\n";
-    std::cout << "Total tensor size: " << totalSize << "\n";
-    std::cout << "Number of control points: " << nCtrlPtsXml << "\n";
-    std::cout << "First CP: x=" << geomTensor[0].item<double>()
-              << "  y=" << geomTensor[nCtrlPtsXml].item<double>()
-              << "  z=" << geomTensor[2*nCtrlPtsXml].item<double>() << "\n";
-    std::cout << "Last CP:  x=" << geomTensor[nCtrlPtsXml-1].item<double>()
-              << "  y=" << geomTensor[2*nCtrlPtsXml-1].item<double>()
-              << "  z=" << geomTensor[3*nCtrlPtsXml-1].item<double>() << "\n";
-    std::cout << "===========================\n";
-
     torch::Tensor netCtrlPts = torch::zeros({nCtrlPtsXml, 3}, geomTensor.options());
     torch::Tensor netDisplacements = torch::zeros({nCtrlPtsXml, 3}, geomTensor.options());
     for (int64_t i = 0; i < nCtrlPtsXml; ++i) {
@@ -237,8 +221,8 @@ int run(
 
     net.appendToJsonFile("net_CtrlPts",          netCtrlPts_j);
     net.appendToJsonFile("net_Displacements",    netDispl_j);
-    net.appendToJsonFile("net_nrCtrlPtsFromXml",  nCtrlPtsXml);
-    net.appendToJsonFile("net_Degree",            DEGREE);
+    net.appendToJsonFile("net_nrCtrlPts",        nCtrlPtsXml);
+    net.appendToJsonFile("net_Degree",           DEGREE);
 
     // Optional: GISMO reference simulation
 
@@ -364,14 +348,19 @@ int main() {
         torch::cuda::is_available() ? torch::Device(torch::kCUDA)
                                     : torch::Device(torch::kCPU);
 
-    std::filesystem::path xmlPath = repoRoot / "bone_simplified.xml";
-    if (geoMode == GeometryMode::Xml &&
-        j.contains("geometry") &&
-        j["geometry"].contains("xml_path")) {
-        const auto xmlPathCfg = j["geometry"]["xml_path"].get<std::string>();
-        xmlPath = std::filesystem::path(xmlPathCfg);
-        if (xmlPath.is_relative()) {
-            xmlPath = repoRoot / xmlPath;
+    std::filesystem::path xmlPath;
+    std::string xmlGeometryId;
+    if (geoMode == GeometryMode::Xml) {
+        try {
+            const std::string xmlPathCfg = require(j, "geometry.xml_path").get<std::string>();
+            xmlGeometryId = require(j, "geometry.xml_id").get<std::string>();
+            xmlPath = std::filesystem::path(xmlPathCfg);
+            if (xmlPath.is_relative()) {
+                xmlPath = repoRoot / xmlPath;
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Config error: " << e.what() << "\n";
+            return 1;
         }
     }
 
@@ -380,14 +369,9 @@ int main() {
                           ((1. + poissonRatio) * (1. - 2.*poissonRatio));
     const double mu     = youngModulus / (2. * (1. + poissonRatio));
 
-    std::cout << "[main] geometry.mode = "
-              << (geoMode == GeometryMode::Xml ? "xml" : "parametric") << "\n";
-    std::cout << "[main] compute device = "
-              << (computeDevice.is_cuda() ? "CUDA" : "CPU") << "\n";
-
     std::optional<XmlGeometryData> xmlData;
     if (geoMode == GeometryMode::Xml) {
-        xmlData.emplace(loadXmlKnotVectors(xmlPath, "100", degreeCfg));
+        xmlData.emplace(loadXmlKnotVectors(xmlPath, xmlGeometryId.c_str(), degreeCfg));
         nrCtrlPts = xmlData->nCtrlPts;
     } else if (j.contains("geometry") && j["geometry"].contains("nr_ctrl_pts")) {
         nrCtrlPts = j["geometry"]["nr_ctrl_pts"].get<int64_t>();
