@@ -15,7 +15,9 @@
     "poisson_ratio": 0.25
   },
   "geometry": {
-    "mode": "parametric"
+    "mode": "parametric",
+    "_xml_example_path": "bone_simplified.xml",
+    "_xml_example_id": "100"
   },
   "spline": {
     "nr_ctrl_pts": 8,
