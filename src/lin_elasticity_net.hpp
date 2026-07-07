@@ -89,6 +89,7 @@ private:
     bool                                  tractionPtsInitialized_ = false;
     std::array<torch::Tensor, 3>          tractionCollPts_;
     std::vector<int>                      nPtsPerSide_;
+    std::optional<torch::Tensor>          stdDisplacements_;
 
     int nrCollPts_ = 0;
 
@@ -382,39 +383,56 @@ public:
                 torch::Tensor tvZ = torch::zeros({nTrac}, ux_x.options());
 
                 int pointCtr = 0;
-                int sideCtr  = 0;
+                int sideCtr = 0;
                 for (int side : neumannSides) {
-                    int n = nPtsPerSide_[sideCtr];
-                    for (int i = 0; i < n; ++i) {
-                        int idx = pointCtr + i;
-                        if (side == 1) {
-                            tvX[idx] = -((lambda_+2.*mu_)*ux_x[idx]+lambda_*uy_y[idx]+lambda_*uz_z[idx]);
-                            tvY[idx] = -(mu_*(ux_y[idx]+uy_x[idx]));
-                            tvZ[idx] = -(mu_*(ux_z[idx]+uz_x[idx]));
-                        } else if (side == 2) {
-                            tvX[idx] =  (lambda_+2.*mu_)*ux_x[idx]+lambda_*uy_y[idx]+lambda_*uz_z[idx];
-                            tvY[idx] =   mu_*(ux_y[idx]+uy_x[idx]);
-                            tvZ[idx] =   mu_*(ux_z[idx]+uz_x[idx]);
-                        } else if (side == 3) {
-                            tvX[idx] = -(mu_*(ux_y[idx]+uy_x[idx]));
-                            tvY[idx] = -(lambda_*ux_x[idx]+(lambda_+2.*mu_)*uy_y[idx]+lambda_*uz_z[idx]);
-                            tvZ[idx] = -(mu_*(uy_z[idx]+uz_y[idx]));
-                        } else if (side == 4) {
-                            tvX[idx] =   mu_*(ux_y[idx]+uy_x[idx]);
-                            tvY[idx] =   lambda_*ux_x[idx]+(lambda_+2.*mu_)*uy_y[idx]+lambda_*uz_z[idx];
-                            tvZ[idx] =   mu_*(uy_z[idx]+uz_y[idx]);
-                        } else if (side == 5) {
-                            tvX[idx] = -(mu_*(ux_z[idx]+uz_x[idx]));
-                            tvY[idx] = -(mu_*(uy_z[idx]+uz_y[idx]));
-                            tvZ[idx] = -(lambda_*ux_x[idx]+lambda_*uy_y[idx]+(lambda_+2.*mu_)*uz_z[idx]);
-                        } else if (side == 6) {
-                            tvX[idx] =   mu_*(ux_z[idx]+uz_x[idx]);
-                            tvY[idx] =   mu_*(uy_z[idx]+uz_y[idx]);
-                            tvZ[idx] =   lambda_*ux_x[idx]+lambda_*uy_y[idx]+(lambda_+2.*mu_)*uz_z[idx];
-                        } else {
-                            throw std::invalid_argument("Side for 3D traction BC has to be 1..6.");
-                        }
+                    const int n = nPtsPerSide_[sideCtr];
+                    if (n == 0) {
+                        ++sideCtr;
+                        continue;
                     }
+
+                    auto xSlice = tvX.slice(0, pointCtr, pointCtr + n);
+                    auto ySlice = tvY.slice(0, pointCtr, pointCtr + n);
+                    auto zSlice = tvZ.slice(0, pointCtr, pointCtr + n);
+
+                    auto ux_x_s = ux_x.slice(0, pointCtr, pointCtr + n);
+                    auto ux_y_s = ux_y.slice(0, pointCtr, pointCtr + n);
+                    auto ux_z_s = ux_z.slice(0, pointCtr, pointCtr + n);
+                    auto uy_x_s = uy_x.slice(0, pointCtr, pointCtr + n);
+                    auto uy_y_s = uy_y.slice(0, pointCtr, pointCtr + n);
+                    auto uy_z_s = uy_z.slice(0, pointCtr, pointCtr + n);
+                    auto uz_x_s = uz_x.slice(0, pointCtr, pointCtr + n);
+                    auto uz_y_s = uz_y.slice(0, pointCtr, pointCtr + n);
+                    auto uz_z_s = uz_z.slice(0, pointCtr, pointCtr + n);
+
+                    if (side == 1) {
+                        xSlice.copy_(-((lambda_ + 2. * mu_) * ux_x_s + lambda_ * uy_y_s + lambda_ * uz_z_s));
+                        ySlice.copy_(-(mu_ * (ux_y_s + uy_x_s)));
+                        zSlice.copy_(-(mu_ * (ux_z_s + uz_x_s)));
+                    } else if (side == 2) {
+                        xSlice.copy_((lambda_ + 2. * mu_) * ux_x_s + lambda_ * uy_y_s + lambda_ * uz_z_s);
+                        ySlice.copy_(mu_ * (ux_y_s + uy_x_s));
+                        zSlice.copy_(mu_ * (ux_z_s + uz_x_s));
+                    } else if (side == 3) {
+                        xSlice.copy_(-(mu_ * (ux_y_s + uy_x_s)));
+                        ySlice.copy_(-(lambda_ * ux_x_s + (lambda_ + 2. * mu_) * uy_y_s + lambda_ * uz_z_s));
+                        zSlice.copy_(-(mu_ * (uy_z_s + uz_y_s)));
+                    } else if (side == 4) {
+                        xSlice.copy_(mu_ * (ux_y_s + uy_x_s));
+                        ySlice.copy_(lambda_ * ux_x_s + (lambda_ + 2. * mu_) * uy_y_s + lambda_ * uz_z_s);
+                        zSlice.copy_(mu_ * (uy_z_s + uz_y_s));
+                    } else if (side == 5) {
+                        xSlice.copy_(-(mu_ * (ux_z_s + uz_x_s)));
+                        ySlice.copy_(-(mu_ * (uy_z_s + uz_y_s)));
+                        zSlice.copy_(-(lambda_ * ux_x_s + lambda_ * uy_y_s + (lambda_ + 2. * mu_) * uz_z_s));
+                    } else if (side == 6) {
+                        xSlice.copy_(mu_ * (ux_z_s + uz_x_s));
+                        ySlice.copy_(mu_ * (uy_z_s + uz_y_s));
+                        zSlice.copy_(lambda_ * ux_x_s + lambda_ * uy_y_s + (lambda_ + 2. * mu_) * uz_z_s);
+                    } else {
+                        throw std::invalid_argument("Side for 3D traction BC has to be 1..6.");
+                    }
+
                     pointCtr += n;
                     ++sideCtr;
                 }
@@ -466,21 +484,17 @@ public:
         auto& uz_xx=hessianColl(0,0,2); auto& uz_yy=hessianColl(1,1,2); auto& uz_zz=hessianColl(2,2,2);
         auto& ux_zx=hessianColl(2,0,0); auto& uy_zy=hessianColl(2,1,1);
 
-        int64_t size = hessianColl(0,0,0).size(0);
         auto opts = hessianColl(0,0,0).options();
 
-        torch::Tensor divStressX = torch::zeros({size}, opts);
-        torch::Tensor divStressY = torch::zeros({size}, opts);
-        torch::Tensor divStressZ = torch::zeros({size}, opts);
-
-        for (int i = 0; i < size; ++i) {
-            divStressX[i] = (lambda_+2.*mu_)*ux_xx[i] + mu_*ux_yy[i] + mu_*ux_zz[i]
-                            + (lambda_+mu_)*(uy_xy[i]+uz_xz[i]);
-            divStressY[i] = mu_*uy_xx[i] + (lambda_+2.*mu_)*uy_yy[i] + mu_*uy_zz[i]
-                            + (lambda_+mu_)*(ux_yx[i]+uz_yz[i]);
-            divStressZ[i] = mu_*uz_xx[i] + mu_*uz_yy[i] + (lambda_+2.*mu_)*uz_zz[i]
-                            + (lambda_+mu_)*(ux_zx[i]+uy_zy[i]);
-        }
+        torch::Tensor divStressX =
+            (lambda_ + 2. * mu_) * ux_xx + mu_ * ux_yy + mu_ * ux_zz
+            + (lambda_ + mu_) * (uy_xy + uz_xz);
+        torch::Tensor divStressY =
+            mu_ * uy_xx + (lambda_ + 2. * mu_) * uy_yy + mu_ * uy_zz
+            + (lambda_ + mu_) * (ux_yx + uz_yz);
+        torch::Tensor divStressZ =
+            mu_ * uz_xx + mu_ * uz_yy + (lambda_ + 2. * mu_) * uz_zz
+            + (lambda_ + mu_) * (ux_zx + uy_zy);
 
         torch::Tensor divStress = torch::stack({divStressX, divStressY, divStressZ}, 1);
 
@@ -560,8 +574,10 @@ public:
                 outputs.slice(0, outputs.size(0)/3,   2*outputs.size(0)/3),
                 outputs.slice(0, 2*outputs.size(0)/3, outputs.size(0))}, 1);
 
-            torch::Tensor stdDisp = loadDisplacements(JSON_PATH_)
-                                    .to(netDisp.options());
+            if (!stdDisplacements_.has_value()) {
+                stdDisplacements_ = loadDisplacements(JSON_PATH_).to(netDisp.options());
+            }
+            torch::Tensor stdDisp = *stdDisplacements_;
 
             const double supWeight = 1e7;
             supLoss   = supWeight * torch::mse_loss(netDisp, stdDisp);
