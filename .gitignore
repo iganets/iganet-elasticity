@@ -1,8 +1,8 @@
 og*
 .vscode/
 build/
-result.json
+results/*
+!results/.gitignore
 std_collocation_python/__pycache__/
 /__pycache__/
 .codex
-.vscode
