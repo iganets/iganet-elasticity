@@ -92,7 +92,7 @@ def make_reference_object(data, degree):
 
 
 def main():
-    result_path = sys.argv[1] if len(sys.argv) > 1 else "result.json"
+    result_path = sys.argv[1] if len(sys.argv) > 1 else "results/result.json"
     data = load_result(result_path)
 
     if "net_Degree" not in data:

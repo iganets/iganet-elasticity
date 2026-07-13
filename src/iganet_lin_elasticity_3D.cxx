@@ -1307,7 +1307,7 @@ int main() {
     }
 
     const std::filesystem::path CONFIG_PATH = repo_root / "sim_config_3D.json";
-    const std::filesystem::path RESULT_JSON_PATH = repo_root / "result.json";  // output file
+    const std::filesystem::path RESULT_JSON_PATH = repo_root / "results" / "result.json";  // output file
 
     // load config
     std::ifstream file(CONFIG_PATH);
@@ -1326,11 +1326,11 @@ int main() {
 
     // run standard collocation simulation with the parameters from the config file 
     const std::string cmd =
-        "cd \"" + repo_root.string() + "\" && python3 run_std_coll.py sim_config_3D.json";
+        "cd \"" + repo_root.string() + "\" && python3 std_collocation_python/run_std_coll.py sim_config_3D.json";
 
     const int ret = std::system(cmd.c_str());
     if (ret != 0) {
-        std::cerr << "ERROR: python reference run (run_std_coll.py) failed. system() returned " << ret << "\n";
+        std::cerr << "ERROR: python reference run (std_collocation_python/run_std_coll.py) failed. system() returned " << ret << "\n";
         return 1;
     }
 
@@ -1342,7 +1342,7 @@ int main() {
     int MAX_EPOCH = 0;
     double MIN_LOSS = 0.0;
     bool SUPERVISED_LEARNING = false;
-    std::string JSON_PATH;  // result.json path (output)
+    std::string JSON_PATH;  // output json path
 
     // reference simulation parameters
     bool RUN_GS_REF_SIM = false;
@@ -1372,7 +1372,7 @@ int main() {
         MIN_LOSS = require(j, "simulation.min_loss").get<double>();
         SUPERVISED_LEARNING = require(j, "simulation.supervised_learning").get<bool>();
 
-        // IMPORTANT: output result.json is fixed in repo root
+        // IMPORTANT: output json is fixed in results/
         JSON_PATH = RESULT_JSON_PATH.string();
 
         // spline

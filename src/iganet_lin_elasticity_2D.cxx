@@ -7,6 +7,8 @@
 using namespace iganet::literals;
 using iganet_elasticity::utils::paths::repo_root_from_build_exe;
 using iganet_elasticity::utils::config::require;
+using optimizer_config_t = iganet_elasticity::utils::config::optimizer_config;
+using optimizer_type_t = iganet_elasticity::utils::config::optimizer_type;
 
 /// @brief Specialization of the IgANet class for linear elasticity in 2D
 template <typename Optimizer, typename GeometryMap, typename Variable>
@@ -1090,7 +1092,7 @@ int main() {
     }
 
     const std::filesystem::path CONFIG_PATH = repo_root / "sim_config_2D.json";
-    const std::filesystem::path RESULT_JSON_PATH = repo_root / "result.json";  // output file
+    const std::filesystem::path RESULT_JSON_PATH = repo_root / "results" / "result.json";  // output file
 
     // load config
     std::ifstream file(CONFIG_PATH);
@@ -1109,11 +1111,11 @@ int main() {
 
     // run standard collocation simulation with the parameters from the config file 
     const std::string cmd =
-        "cd \"" + repo_root.string() + "\" && python3 run_std_coll.py sim_config_2D.json";
+        "cd \"" + repo_root.string() + "\" && python3 std_collocation_python/run_std_coll.py sim_config_2D.json";
 
     const int ret = std::system(cmd.c_str());
     if (ret != 0) {
-        std::cerr << "ERROR: python reference run (run_std_coll.py) failed. system() returned " << ret << "\n";
+        std::cerr << "ERROR: python reference run (std_collocation_python/run_std_coll.py) failed. system() returned " << ret << "\n";
         return 1;
     }
 
@@ -1125,7 +1127,8 @@ int main() {
     int MAX_EPOCH = 0;
     double MIN_LOSS = 0.0;
     bool SUPERVISED_LEARNING = false;
-    std::string JSON_PATH;  // result.json path (output)
+    std::string JSON_PATH;  // output json path
+    optimizer_config_t OPTIMIZER_CFG;
 
     // reference simulation parameters
     bool RUN_GS_REF_SIM = false;
@@ -1154,33 +1157,34 @@ int main() {
         MAX_EPOCH = require(j, "simulation.max_epoch").get<int>();
         MIN_LOSS = require(j, "simulation.min_loss").get<double>();
         SUPERVISED_LEARNING = require(j, "simulation.supervised_learning").get<bool>();
+        OPTIMIZER_CFG = iganet_elasticity::utils::config::load_optimizer_config(j);
 
-        // IMPORTANT: output result.json is fixed in repo root
+        // IMPORTANT: output json is fixed in results/
         JSON_PATH = RESULT_JSON_PATH.string();
 
         // spline
         NR_CTRL_PTS = require(j, "spline.nr_ctrl_pts").get<int64_t>();
         DEGREE_CFG = require(j, "spline.degree").get<int>();
 
-        // BCs
+        const auto patch_cfgs = iganet_elasticity::utils::config::load_patch_configs_2d(j);
+        if (patch_cfgs.empty()) {
+            throw std::runtime_error("No 2D patch configuration found in config");
+        }
+        const auto& patch_cfg = patch_cfgs.front();
+
         FORCE_SIDES.clear();
-        for (const auto& fsj : require(j, "boundary_conditions.force_sides")) {
-            FORCE_SIDES.emplace_back(fsj.at(0).get<int>(), fsj.at(1).get<double>(), fsj.at(2).get<double>());
+        for (const auto& bc : patch_cfg.force_sides) {
+            FORCE_SIDES.emplace_back(bc.side, bc.x, bc.y);
         }
 
         DIRI_SIDES.clear();
-        for (const auto& dsj : require(j, "boundary_conditions.diri_sides")) {
-            DIRI_SIDES.emplace_back(dsj.at(0).get<int>(), dsj.at(1).get<double>(), dsj.at(2).get<double>());
+        for (const auto& bc : patch_cfg.diri_sides) {
+            DIRI_SIDES.emplace_back(bc.side, bc.x, bc.y);
         }
 
-        TFBC_SIDES = require(j, "boundary_conditions.tfbc_sides").get<std::vector<int>>();
-
-        // body force
-        {
-            const auto& bf = require(j, "body_force");
-            BODY_FORCE.first = bf.at(0).get<double>();
-            BODY_FORCE.second = bf.at(1).get<double>();
-        }
+        TFBC_SIDES = patch_cfg.tfbc_sides;
+        BODY_FORCE.first = patch_cfg.body_force[0];
+        BODY_FORCE.second = patch_cfg.body_force[1];
 
         // reference simulation (only if present in config)
         if (j.contains("reference_simulation")) {
@@ -1200,10 +1204,9 @@ int main() {
                     ((1 + POISSON_RATIO) * (1 - 2 * POISSON_RATIO));
     double mu = YOUNG_MODULUS / (2 * (1 + POISSON_RATIO));
 
-    auto run = [&]<int DEGREE>() -> int {
+    auto run = [&]<int DEGREE, typename optimizer_t>() -> int {
         using real_t = double;
         using namespace iganet::literals;
-        using optimizer_t = torch::optim::LBFGS;
         using geometry_t = iganet::S<iganet::UniformBSpline<real_t, 2, DEGREE, DEGREE>>;
         using variable_t = iganet::S<iganet::UniformBSpline<real_t, 2, DEGREE, DEGREE>>;
         using linear_elasticity_t = linear_elasticity<optimizer_t, geometry_t, variable_t>;
@@ -1466,13 +1469,26 @@ int main() {
         return 0;
     };
     
-    switch (DEGREE_CFG) {
-    case 2: return run.template operator()<2>();
-    case 3: return run.template operator()<3>();
-    case 4: return run.template operator()<4>();
-    case 5: return run.template operator()<5>();
-    case 6: return run.template operator()<6>();
-    default: std::cerr << "Error: Invalid degree " << DEGREE_CFG << " (2..6)\n" << std::endl;
+    const auto dispatch = [&]<typename optimizer_t>() -> int {
+        switch (DEGREE_CFG) {
+        case 2: return run.template operator()<2, optimizer_t>();
+        case 3: return run.template operator()<3, optimizer_t>();
+        case 4: return run.template operator()<4, optimizer_t>();
+        case 5: return run.template operator()<5, optimizer_t>();
+        case 6: return run.template operator()<6, optimizer_t>();
+        default:
+            std::cerr << "Error: Invalid degree " << DEGREE_CFG << " (2..6)\n" << std::endl;
+            return 1;
+        }
+    };
+
+    switch (OPTIMIZER_CFG.type) {
+    case optimizer_type_t::adam:
+        return dispatch.template operator()<torch::optim::Adam>();
+    case optimizer_type_t::lbfgs:
+        return dispatch.template operator()<torch::optim::LBFGS>();
+    default:
+        std::cerr << "Unsupported optimizer selection in sim_config_2D.json\n";
         return 1;
     }
 
