@@ -1,7 +1,9 @@
 #pragma once
 
 #include <iganet.h>
+#include <utils/config.hpp>
 
+#include <algorithm>
 #include <any>
 #include <array>
 #include <iomanip>
@@ -14,6 +16,7 @@ template <typename Real>
 struct MultipatchElasticityConfig {
     using real_t = Real;
     using boundary_value_t = std::tuple<int, real_t, real_t, real_t>;
+    using patch_config_t = iganet_elasticity::utils::config::patch_config_3d;
 
     real_t youngModulus{210.0};
     real_t poissonRatio{0.25};
@@ -26,6 +29,7 @@ struct MultipatchElasticityConfig {
     std::vector<boundary_value_t> diriSides;
     std::vector<boundary_value_t> forceSides;
     std::vector<int> tfbcSides;
+    std::vector<patch_config_t> patchConfigs;
 };
 
 namespace iganet_elasticity::multipatch {
@@ -96,8 +100,41 @@ class linear_elasticity
     : public iganet::IgANet<Optimizer, std::tuple<MultiPatch>, std::tuple<MultiPatch>> {
 public:
     using real_t = typename MultiPatch::value_type;
+    using patch_t = typename MultiPatch::patch_type;
     using base_t = iganet::IgANet<Optimizer, std::tuple<MultiPatch>, std::tuple<MultiPatch>>;
     using config_t = MultipatchElasticityConfig<real_t>;
+    using PreparedPointSet = typename patch_t::PreparedEvaluation;
+
+    struct PatchResidualCache {
+        std::size_t patchIndex{0};
+        PreparedPointSet eval;
+        torch::Tensor body;
+        torch::Tensor J;
+        torch::Tensor invJ;
+        std::array<torch::Tensor, 3> hessG;
+    };
+
+    struct BoundaryTractionCache {
+        std::size_t patchIndex{0};
+        iganet::short_t side{0};
+        PreparedPointSet eval;
+        torch::Tensor target;
+        torch::Tensor J;
+        torch::Tensor invJ;
+    };
+
+    struct InterfaceCache {
+        std::size_t patch1{0};
+        iganet::short_t side1{0};
+        PreparedPointSet eval1;
+        torch::Tensor J1;
+        torch::Tensor invJ1;
+        std::size_t patch2{0};
+        iganet::short_t side2{0};
+        PreparedPointSet eval2;
+        torch::Tensor J2;
+        torch::Tensor invJ2;
+    };
 
     struct LossParts {
         torch::Tensor total;
@@ -132,6 +169,8 @@ public:
         lambda_ = (cfg_.youngModulus * cfg_.poissonRatio) /
                   ((1.0 + cfg_.poissonRatio) * (1.0 - 2.0 * cfg_.poissonRatio));
         mu_ = cfg_.youngModulus / (2.0 * (1.0 + cfg_.poissonRatio));
+
+        prepare_caches();
     }
 
     bool epoch(int64_t) override {
@@ -177,84 +216,236 @@ public:
     }
 
 private:
-    LossParts loss_parts(const torch::Tensor& displacementTensor) const {
-        auto collocationLoss = torch::zeros({}, tensorOptions_);
-        auto tractionLoss = torch::zeros({}, tensorOptions_);
-        auto interfaceLoss = torch::zeros({}, tensorOptions_);
-        const auto body = torch::tensor(
-            {cfg_.bodyForce[0], cfg_.bodyForce[1], cfg_.bodyForce[2]}, tensorOptions_).view({1, 3});
-
-        for (std::size_t patchIndex = 0; patchIndex < geometry().npatches(); ++patchIndex) {
-            const auto xi = to_device(geometry().patch(patchIndex).greville(true),
-                                      tensorOptions_.device());
-            const auto divStress = div_stress_on_patch(patchIndex, displacementTensor, xi);
-            collocationLoss = collocationLoss +
-                              torch::mse_loss(divStress, -body.repeat({divStress.size(0), 1}));
-        }
-
-        for (const auto& side : cfg_.tfbcSides) {
-            for (const auto& [boundary, xiRaw] : geometry().boundary_greville(side_label(side))) {
-                const auto xi = to_device(xiRaw, tensorOptions_.device());
-                const auto traction =
-                    traction_on_boundary(boundary.patch, boundary.side, displacementTensor, xi);
-                tractionLoss = tractionLoss +
-                               torch::mse_loss(traction, torch::zeros_like(traction));
-            }
-        }
-
-        for (const auto& entry : cfg_.forceSides) {
-            const int side = std::get<0>(entry);
-            const auto target = torch::tensor(
-                {std::get<1>(entry), std::get<2>(entry), std::get<3>(entry)}, tensorOptions_)
-                                    .view({1, 3});
-            for (const auto& [boundary, xiRaw] : geometry().boundary_greville(side_label(side))) {
-                const auto xi = to_device(xiRaw, tensorOptions_.device());
-                const auto traction =
-                    traction_on_boundary(boundary.patch, boundary.side, displacementTensor, xi);
-                tractionLoss = tractionLoss +
-                               torch::mse_loss(traction, target.repeat({traction.size(0), 1}));
-            }
-        }
-
-        for (const auto& interface : geometry().interfaces()) {
-            const auto [xi1Raw, xi2Raw] = geometry().interface_greville(interface);
-            const auto xi1 = to_device(xi1Raw, tensorOptions_.device());
-            const auto xi2 = to_device(xi2Raw, tensorOptions_.device());
-            const auto t1 = traction_on_boundary(
-                interface.patch1, interface.side1, displacementTensor, xi1);
-            const auto t2 = traction_on_boundary(
-                interface.patch2, interface.side2, displacementTensor, xi2);
-            interfaceLoss = interfaceLoss + torch::mse_loss(t1 + t2, torch::zeros_like(t1));
-        }
-
-        return {
-            collocationLoss + tractionLoss + interfaceLoss,
-            collocationLoss,
-            tractionLoss,
-            interfaceLoss};
+    bool has_patch_configs() const {
+        return !cfg_.patchConfigs.empty();
     }
 
-    torch::Tensor div_stress_on_patch(
-        std::size_t patchIndex,
-        const torch::Tensor& displacementTensor,
-        const iganet::utils::TensorArray<3>& xi) const {
+    const typename config_t::patch_config_t* patch_config(std::size_t patchIndex) const {
+        for (const auto& entry : cfg_.patchConfigs) {
+            if (static_cast<std::size_t>(entry.patch_id) == patchIndex) {
+                return &entry;
+            }
+        }
+        return nullptr;
+    }
+
+    std::array<real_t, 3> body_force(std::size_t patchIndex) const {
+        if (const auto* entry = patch_config(patchIndex)) {
+            return {entry->body_force[0], entry->body_force[1], entry->body_force[2]};
+        }
+        return cfg_.bodyForce;
+    }
+
+    torch::Tensor make_body_tensor(std::size_t patchIndex) const {
+        const auto patchBodyForce = body_force(patchIndex);
+        return torch::tensor(
+            {patchBodyForce[0], patchBodyForce[1], patchBodyForce[2]}, tensorOptions_)
+            .view({1, 3});
+    }
+
+    PreparedPointSet prepare_point_set(std::size_t patchIndex,
+                                       const iganet::utils::TensorArray<3>& xi) const {
         const auto G = geometry().patch(patchIndex);
-        const auto U = local_patch_with_tensor(displacement(), patchIndex, displacementTensor);
+        return G.template prepare_evaluation<
+            iganet::deriv::dx,
+            iganet::deriv::dy,
+            iganet::deriv::dz,
+            iganet::deriv::dx ^ 2,
+            iganet::deriv::dx + iganet::deriv::dy,
+            iganet::deriv::dx + iganet::deriv::dz,
+            iganet::deriv::dy ^ 2,
+            iganet::deriv::dy + iganet::deriv::dz,
+            iganet::deriv::dz ^ 2>(xi);
+    }
 
-        const auto gdx = G.template eval<iganet::deriv::dx>(xi);
-        const auto gdy = G.template eval<iganet::deriv::dy>(xi);
-        const auto gdz = G.template eval<iganet::deriv::dz>(xi);
-        const auto udx = U.template eval<iganet::deriv::dx>(xi);
-        const auto udy = U.template eval<iganet::deriv::dy>(xi);
-        const auto udz = U.template eval<iganet::deriv::dz>(xi);
+    std::tuple<torch::Tensor, torch::Tensor, std::array<torch::Tensor, 3>>
+    prepare_geometry_terms(std::size_t patchIndex, const PreparedPointSet& cache) const {
+        if (cache.numeval == 0) {
+            return {
+                torch::empty({0, 3, 3}, tensorOptions_),
+                torch::empty({0, 3, 3}, tensorOptions_),
+                {
+                    torch::empty({0, 3, 3}, tensorOptions_),
+                    torch::empty({0, 3, 3}, tensorOptions_),
+                    torch::empty({0, 3, 3}, tensorOptions_)}};
+        }
 
+        const auto G = geometry().patch(patchIndex);
+        const auto gdx = G.template eval_from_prepared<iganet::deriv::dx>(cache);
+        const auto gdy = G.template eval_from_prepared<iganet::deriv::dy>(cache);
+        const auto gdz = G.template eval_from_prepared<iganet::deriv::dz>(cache);
         const auto J = stack_parametric_jacobian(gdx, gdy, gdz);
         const auto invJ = torch::linalg_inv(J);
-        const auto gradUxi = stack_parametric_jacobian(udx, udy, udz);
-        const auto gradU = torch::matmul(gradUxi, invJ);
 
-        const auto hessG = parametric_hessians(G, xi);
-        const auto hessUxi = parametric_hessians(U, xi);
+        const auto gxx = G.template eval_from_prepared<iganet::deriv::dx ^ 2>(cache);
+        const auto gxy =
+            G.template eval_from_prepared<iganet::deriv::dx + iganet::deriv::dy>(cache);
+        const auto gxz =
+            G.template eval_from_prepared<iganet::deriv::dx + iganet::deriv::dz>(cache);
+        const auto gyy = G.template eval_from_prepared<iganet::deriv::dy ^ 2>(cache);
+        const auto gyz =
+            G.template eval_from_prepared<iganet::deriv::dy + iganet::deriv::dz>(cache);
+        const auto gzz = G.template eval_from_prepared<iganet::deriv::dz ^ 2>(cache);
+        const auto hessG = stack_parametric_hessians(gxx, gxy, gxz, gyy, gyz, gzz);
+        return {J, invJ, hessG};
+    }
+
+    void prepare_caches() {
+        patchResidualCaches_.clear();
+        tractionCaches_.clear();
+        interfaceCaches_.clear();
+
+        patchResidualCaches_.reserve(geometry().npatches());
+        for (std::size_t patchIndex = 0; patchIndex < geometry().npatches(); ++patchIndex) {
+            auto xi = to_device(geometry().patch(patchIndex).greville(true), tensorOptions_.device());
+            auto eval = prepare_point_set(patchIndex, xi);
+            auto [J, invJ, hessG] = prepare_geometry_terms(patchIndex, eval);
+            PatchResidualCache cache;
+            cache.patchIndex = patchIndex;
+            cache.eval = std::move(eval);
+            cache.body = make_body_tensor(patchIndex);
+            cache.J = std::move(J);
+            cache.invJ = std::move(invJ);
+            cache.hessG = std::move(hessG);
+            patchResidualCaches_.push_back(std::move(cache));
+        }
+
+        if (has_patch_configs()) {
+            for (const auto& patchCfg : cfg_.patchConfigs) {
+                const auto patchIndex = static_cast<std::size_t>(patchCfg.patch_id);
+                for (const auto side : patchCfg.tfbc_sides) {
+                    auto xi = to_device(
+                        geometry().side_greville(patchIndex, static_cast<iganet::short_t>(side)),
+                        tensorOptions_.device());
+                    auto eval = prepare_point_set(patchIndex, xi);
+                    auto [J, invJ, hessG] = prepare_geometry_terms(patchIndex, eval);
+                    BoundaryTractionCache cache;
+                    cache.patchIndex = patchIndex;
+                    cache.side = static_cast<iganet::short_t>(side);
+                    cache.eval = std::move(eval);
+                    cache.target = torch::zeros({1, 3}, tensorOptions_);
+                    cache.J = std::move(J);
+                    cache.invJ = std::move(invJ);
+                    tractionCaches_.push_back(std::move(cache));
+                }
+
+                for (const auto& entry : patchCfg.force_sides) {
+                    auto xi = to_device(
+                        geometry().side_greville(patchIndex, static_cast<iganet::short_t>(entry.side)),
+                        tensorOptions_.device());
+                    auto eval = prepare_point_set(patchIndex, xi);
+                    auto [J, invJ, hessG] = prepare_geometry_terms(patchIndex, eval);
+                    BoundaryTractionCache cache;
+                    cache.patchIndex = patchIndex;
+                    cache.side = static_cast<iganet::short_t>(entry.side);
+                    cache.eval = std::move(eval);
+                    cache.target = torch::tensor({entry.x, entry.y, entry.z}, tensorOptions_)
+                                       .view({1, 3});
+                    cache.J = std::move(J);
+                    cache.invJ = std::move(invJ);
+                    tractionCaches_.push_back(std::move(cache));
+                }
+            }
+        } else {
+            for (const auto& side : cfg_.tfbcSides) {
+                for (const auto& [boundary, xiRaw] : geometry().boundary_greville(side_label(side))) {
+                    auto xi = to_device(xiRaw, tensorOptions_.device());
+                    auto eval = prepare_point_set(boundary.patch, xi);
+                    auto [J, invJ, hessG] = prepare_geometry_terms(boundary.patch, eval);
+                    BoundaryTractionCache cache;
+                    cache.patchIndex = boundary.patch;
+                    cache.side = boundary.side;
+                    cache.eval = std::move(eval);
+                    cache.target = torch::zeros({1, 3}, tensorOptions_);
+                    cache.J = std::move(J);
+                    cache.invJ = std::move(invJ);
+                    tractionCaches_.push_back(std::move(cache));
+                }
+            }
+
+            for (const auto& entry : cfg_.forceSides) {
+                const int side = std::get<0>(entry);
+                for (const auto& [boundary, xiRaw] : geometry().boundary_greville(side_label(side))) {
+                    auto xi = to_device(xiRaw, tensorOptions_.device());
+                    auto eval = prepare_point_set(boundary.patch, xi);
+                    auto [J, invJ, hessG] = prepare_geometry_terms(boundary.patch, eval);
+                    BoundaryTractionCache cache;
+                    cache.patchIndex = boundary.patch;
+                    cache.side = boundary.side;
+                    cache.eval = std::move(eval);
+                    cache.target = torch::tensor(
+                                       {std::get<1>(entry), std::get<2>(entry), std::get<3>(entry)},
+                                       tensorOptions_)
+                                       .view({1, 3});
+                    cache.J = std::move(J);
+                    cache.invJ = std::move(invJ);
+                    tractionCaches_.push_back(std::move(cache));
+                }
+            }
+        }
+
+        interfaceCaches_.reserve(geometry().ninterfaces());
+        for (const auto& interface : geometry().interfaces()) {
+            auto [xi1, xi2] = geometry().interface_greville(interface);
+            xi1 = to_device(xi1, tensorOptions_.device());
+            xi2 = to_device(xi2, tensorOptions_.device());
+            auto eval1 = prepare_point_set(interface.patch1, xi1);
+            auto eval2 = prepare_point_set(interface.patch2, xi2);
+            auto [J1, invJ1, hessG1] = prepare_geometry_terms(interface.patch1, eval1);
+            auto [J2, invJ2, hessG2] = prepare_geometry_terms(interface.patch2, eval2);
+            InterfaceCache cache;
+            cache.patch1 = interface.patch1;
+            cache.side1 = interface.side1;
+            cache.eval1 = std::move(eval1);
+            cache.J1 = std::move(J1);
+            cache.invJ1 = std::move(invJ1);
+            cache.patch2 = interface.patch2;
+            cache.side2 = interface.side2;
+            cache.eval2 = std::move(eval2);
+            cache.J2 = std::move(J2);
+            cache.invJ2 = std::move(invJ2);
+            interfaceCaches_.push_back(std::move(cache));
+        }
+    }
+
+    torch::Tensor evaluate_parametric_gradient(const patch_t& U,
+                                               const PreparedPointSet& cache) const {
+        const auto udx = U.template eval_from_prepared<iganet::deriv::dx>(cache);
+        const auto udy = U.template eval_from_prepared<iganet::deriv::dy>(cache);
+        const auto udz = U.template eval_from_prepared<iganet::deriv::dz>(cache);
+        return stack_parametric_jacobian(udx, udy, udz);
+    }
+
+    std::array<torch::Tensor, 3> evaluate_parametric_hessians(
+        const patch_t& U,
+        const PreparedPointSet& cache) const {
+        const auto uxx = U.template eval_from_prepared<iganet::deriv::dx ^ 2>(cache);
+        const auto uxy =
+            U.template eval_from_prepared<iganet::deriv::dx + iganet::deriv::dy>(cache);
+        const auto uxz =
+            U.template eval_from_prepared<iganet::deriv::dx + iganet::deriv::dz>(cache);
+        const auto uyy = U.template eval_from_prepared<iganet::deriv::dy ^ 2>(cache);
+        const auto uyz =
+            U.template eval_from_prepared<iganet::deriv::dy + iganet::deriv::dz>(cache);
+        const auto uzz = U.template eval_from_prepared<iganet::deriv::dz ^ 2>(cache);
+        return stack_parametric_hessians(uxx, uxy, uxz, uyy, uyz, uzz);
+    }
+
+    torch::Tensor strong_form_residual(
+        std::size_t patchIndex,
+        const torch::Tensor& displacementTensor,
+        const PreparedPointSet& cache,
+        const torch::Tensor& invJ,
+        const std::array<torch::Tensor, 3>& hessG,
+        const torch::Tensor& body) const {
+        if (cache.numeval == 0) {
+            return torch::empty({0, 3}, tensorOptions_);
+        }
+
+        const auto U = local_patch_with_tensor(displacement(), patchIndex, displacementTensor);
+        const auto gradUxi = evaluate_parametric_gradient(U, cache);
+        const auto gradU = torch::matmul(gradUxi, invJ);
+        const auto hessUxi = evaluate_parametric_hessians(U, cache);
         std::array<torch::Tensor, 3> hessU;
         for (iganet::short_t c = 0; c < 3; ++c) {
             auto corrected = hessUxi[c].clone();
@@ -284,33 +475,74 @@ private:
         const auto ux_zx = hessU[0].index({torch::indexing::Slice(), 2, 0});
         const auto uy_zy = hessU[1].index({torch::indexing::Slice(), 2, 1});
 
-        return torch::stack({
+        const auto divStress = torch::stack({
             (lambda_ + 2.0 * mu_) * ux_xx + mu_ * ux_yy + mu_ * ux_zz +
                 (lambda_ + mu_) * (uy_xy + uz_xz),
             mu_ * uy_xx + (lambda_ + 2.0 * mu_) * uy_yy + mu_ * uy_zz +
                 (lambda_ + mu_) * (ux_yx + uz_yz),
             mu_ * uz_xx + mu_ * uz_yy + (lambda_ + 2.0 * mu_) * uz_zz +
                 (lambda_ + mu_) * (ux_zx + uy_zy)}, 1);
+
+        return divStress + body.repeat({divStress.size(0), 1});
+    }
+
+    LossParts loss_parts(const torch::Tensor& displacementTensor) const {
+        auto collocationLoss = torch::zeros({}, tensorOptions_);
+        auto tractionLoss = torch::zeros({}, tensorOptions_);
+        auto interfaceLoss = torch::zeros({}, tensorOptions_);
+
+        for (const auto& cache : patchResidualCaches_) {
+            if (cache.eval.numeval == 0) {
+                continue;
+            }
+            const auto residual = strong_form_residual(
+                cache.patchIndex, displacementTensor, cache.eval, cache.invJ, cache.hessG,
+                cache.body);
+            collocationLoss = collocationLoss +
+                              torch::mse_loss(residual, torch::zeros_like(residual));
+        }
+
+        for (const auto& cache : tractionCaches_) {
+            if (cache.eval.numeval == 0) {
+                continue;
+            }
+            const auto traction = traction_on_boundary(
+                cache.patchIndex, cache.side, displacementTensor, cache.eval, cache.J, cache.invJ);
+            tractionLoss = tractionLoss +
+                           torch::mse_loss(traction, cache.target.repeat({traction.size(0), 1}));
+        }
+
+        for (const auto& cache : interfaceCaches_) {
+            if (cache.eval1.numeval == 0 || cache.eval2.numeval == 0) {
+                continue;
+            }
+            const auto t1 = traction_on_boundary(
+                cache.patch1, cache.side1, displacementTensor, cache.eval1, cache.J1, cache.invJ1);
+            const auto t2 = traction_on_boundary(
+                cache.patch2, cache.side2, displacementTensor, cache.eval2, cache.J2, cache.invJ2);
+            interfaceLoss = interfaceLoss + torch::mse_loss(t1 + t2, torch::zeros_like(t1));
+        }
+
+        return {
+            collocationLoss + tractionLoss + interfaceLoss,
+            collocationLoss,
+            tractionLoss,
+            interfaceLoss};
     }
 
     torch::Tensor traction_on_boundary(
         std::size_t patchIndex,
         iganet::short_t side,
         const torch::Tensor& displacementTensor,
-        const iganet::utils::TensorArray<3>& xi) const {
-        const auto G = geometry().patch(patchIndex);
+        const PreparedPointSet& cache,
+        const torch::Tensor& J,
+        const torch::Tensor& invJ) const {
+        if (cache.numeval == 0) {
+            return torch::empty({0, 3}, tensorOptions_);
+        }
+
         const auto U = local_patch_with_tensor(displacement(), patchIndex, displacementTensor);
-
-        const auto gdx = G.template eval<iganet::deriv::dx>(xi);
-        const auto gdy = G.template eval<iganet::deriv::dy>(xi);
-        const auto gdz = G.template eval<iganet::deriv::dz>(xi);
-        const auto udx = U.template eval<iganet::deriv::dx>(xi);
-        const auto udy = U.template eval<iganet::deriv::dy>(xi);
-        const auto udz = U.template eval<iganet::deriv::dz>(xi);
-
-        const auto J = stack_parametric_jacobian(gdx, gdy, gdz);
-        const auto invJ = torch::linalg_inv(J);
-        const auto gradUxi = stack_parametric_jacobian(udx, udy, udz);
+        const auto gradUxi = evaluate_parametric_gradient(U, cache);
         const auto gradU = torch::matmul(gradUxi, invJ);
         const auto strain = 0.5 * (gradU + gradU.transpose(1, 2));
         const auto trace = strain.index({torch::indexing::Slice(), 0, 0}) +
@@ -346,6 +578,9 @@ private:
     config_t cfg_;
     torch::TensorOptions tensorOptions_;
     std::vector<double> history_;
+    std::vector<PatchResidualCache> patchResidualCaches_;
+    std::vector<BoundaryTractionCache> tractionCaches_;
+    std::vector<InterfaceCache> interfaceCaches_;
     std::array<double, 4> lastLossParts_{};
     double lambda_{0.0};
     double mu_{0.0};
