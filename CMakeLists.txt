@@ -32,19 +32,21 @@ target_include_directories(iganet_elasticity_interface INTERFACE ${PROJECT_SOURC
 ########################################################################
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 
-  if(EXISTS "${CMAKE_SOURCE_DIR}/.git")
-    FetchContent_Declare(
-      iganet_core
-      GIT_REPOSITORY https://github.com/iganets/iganet.git
-      GIT_TAG main
-    )
-  else()  
-    FetchContent_Declare(
-      iganet_core
-      URL https://github.com/iganets/iganet/archive/refs/heads/main.zip
-    )
-  endif()
+  set(IGANET_CORE_GIT_REPOSITORY
+      "https://github.com/iganets/iganet.git"
+      CACHE STRING "IgANet core git repository")
+  set(IGANET_CORE_GIT_TAG
+      "ober_multipatch"
+      CACHE STRING "IgANet core git branch, tag, or commit")
 
+  message(STATUS
+          "Fetching IgANet core from ${IGANET_CORE_GIT_REPOSITORY} "
+          "(${IGANET_CORE_GIT_TAG})")
+  FetchContent_Declare(
+    iganet_core
+    GIT_REPOSITORY ${IGANET_CORE_GIT_REPOSITORY}
+    GIT_TAG ${IGANET_CORE_GIT_TAG}
+  )
   FetchContent_MakeAvailable(iganet_core)
   FetchContent_GetProperties(iganet_core)
   
