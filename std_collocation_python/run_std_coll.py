@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 
 import numpy as np
 
@@ -28,6 +29,8 @@ _SIDE_TO_NAME_3D = {
     5: "front",
     6: "back",
 }
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def load_json_with_line_comments(path: str) -> dict:
@@ -67,12 +70,16 @@ def require_vector_length(values, expected_length: int, name: str):
 
 
 def resolve_out_path(out_path_from_cfg: str) -> str:
-    if os.path.isabs(out_path_from_cfg):
-        return out_path_from_cfg
-    return os.path.join(os.path.dirname(__file__), out_path_from_cfg)
+    out_path = Path(out_path_from_cfg)
+    if out_path.is_absolute():
+        return str(out_path)
+    return str(REPO_ROOT / out_path)
 
 
 def detect_dimension(cfg: dict) -> int:
+    if "patches_2d" in cfg:
+        return 2
+
     body_force = get_required(cfg, "body_force")
     if not isinstance(body_force, (list, tuple)):
         raise ValueError("Config key 'body_force' must be a list.")
@@ -157,24 +164,32 @@ def update_json_payload(out_path: str, payload: dict) -> None:
         json.dump(existing, f, indent=2)
 
 
+def load_patch_config_2d(cfg: dict) -> dict:
+    patches = get_required(cfg, "patches_2d")
+    if not isinstance(patches, list) or not patches:
+        raise ValueError("Config key 'patches_2d' must contain at least one patch entry.")
+    return patches[0]
+
+
 def run_2d(cfg: dict, out_path: str) -> None:
     E = float(get_required(cfg, "material.young_modulus"))
     nu = float(get_required(cfg, "material.poisson_ratio"))
     ncp = int(get_required(cfg, "spline.nr_ctrl_pts"))
     degree = int(get_required(cfg, "spline.degree"))
 
-    bf_raw = require_vector_length(get_required(cfg, "body_force"), 2, "body_force")
+    patch_cfg = load_patch_config_2d(cfg)
+    bf_raw = require_vector_length(patch_cfg["body_force"], 2, "patches_2d[0].body_force")
     body_force = (float(bf_raw[0]), float(bf_raw[1]))
 
-    bc_cfg = get_required(cfg, "boundary_conditions")
+    bc_cfg = get_required(patch_cfg, "boundary_conditions")
     force_sides = []
     for i, side in enumerate(get_optional(bc_cfg, "force_sides", [])):
-        s = require_vector_length(side, 3, f"boundary_conditions.force_sides[{i}]")
+        s = require_vector_length(side, 3, f"patches_2d[0].boundary_conditions.force_sides[{i}]")
         force_sides.append((int(s[0]), float(s[1]), float(s[2])))
 
     diri_sides = []
     for i, side in enumerate(get_optional(bc_cfg, "diri_sides", [])):
-        s = require_vector_length(side, 3, f"boundary_conditions.diri_sides[{i}]")
+        s = require_vector_length(side, 3, f"patches_2d[0].boundary_conditions.diri_sides[{i}]")
         diri_sides.append((int(s[0]), float(s[1]), float(s[2])))
 
     tfbc_sides = [int(s) for s in get_optional(bc_cfg, "tfbc_sides", [])]
@@ -295,18 +310,16 @@ def run_3d(cfg: dict, out_path: str) -> None:
 
 def main():
     if len(sys.argv) != 2:
-        raise SystemExit("Usage: python3 run_std_coll.py <config_path>")
+        raise SystemExit("Usage: python3 std_collocation_python/run_std_coll.py <config_path>")
 
     config_arg = sys.argv[1]
-    config_path = (
-        config_arg
-        if os.path.isabs(config_arg)
-        else os.path.join(os.path.dirname(__file__), config_arg)
-    )
+    config_path = Path(config_arg)
+    if not config_path.is_absolute():
+        config_path = REPO_ROOT / config_path
 
-    cfg = load_json_with_line_comments(config_path)
+    cfg = load_json_with_line_comments(str(config_path))
 
-    out_path_cfg = get_optional(cfg, "simulation.json_path", "result.json")
+    out_path_cfg = get_optional(cfg, "simulation.json_path", "results/result.json")
     out_path = resolve_out_path(out_path_cfg)
 
     dim = detect_dimension(cfg)
