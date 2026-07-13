@@ -2,7 +2,8 @@
   "simulation": {
     "max_epoch": 20,
     "min_loss": 1e-6,
-    "supervised_learning": false
+    "supervised_learning": false,
+    "device": "cpu"
   },
   "reference_simulation": {
     "run_gs_ref_sim": false,
@@ -16,20 +17,52 @@
   },
   "geometry": {
     "mode": "parametric",
-    "_xml_example_path": "bone_simplified.xml",
-    "_xml_example_id": "100"
+    "multipatch_xml_path": "filedata/two_cube_parametric.xml",
+    "multipatch_id": 0
   },
-  "spline": {
-    "nr_ctrl_pts": 8,
-    "degree": 4
+  "geometry_spline": {
+    "nr_ctrl_pts": 6,
+    "degree": 3
   },
-  "boundary_conditions": {
-    "force_sides": [],
-    "diri_sides": [
-      [1, 0.0, 0.0, 0.0],
-      [2, 0.1, 0.0, 0.0]
-    ],
-    "tfbc_sides": [3, 4, 5, 6]
+  "solution_spline": {
+    "nr_ctrl_pts": 6,
+    "degree": 3
   },
-  "body_force": [0.0, 0.0, 0.0]
+  "single_patch_3D": {
+    "body_force": [0.0, 0.0, 0.0],
+    "boundary_conditions": {
+      "force_sides": [],
+      "diri_sides": [
+        [1, 0.0, 0.0, 0.0],
+        [2, 0.1, 0.0, 0.0]
+      ],
+      "tfbc_sides": [3, 4, 5, 6]
+    }
+  },
+  "multipatch_3D": {
+    "patches": [
+      {
+        "patch_id": 100,
+        "body_force": [0.0, 0.0, 0.0],
+        "boundary_conditions": {
+          "force_sides": [],
+          "diri_sides": [
+            [1, 0.0, 0.0, 0.0]
+          ],
+          "tfbc_sides": [3, 4, 5, 6]
+        }
+      },
+      {
+        "patch_id": 101,
+        "body_force": [0.0, 0.0, 0.0],
+        "boundary_conditions": {
+          "force_sides": [],
+          "diri_sides": [
+            [2, 0.1, 0.0, 0.0]
+          ],
+          "tfbc_sides": [3, 4, 5, 6]
+        }
+      }
+    ]
+  }
 }

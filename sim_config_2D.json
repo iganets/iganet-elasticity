@@ -4,13 +4,15 @@
   },
   "geometry": {
     "mode": "xml",
-    "multipatch_xml_path": "filedata/two_patch_smoke.xml",
+    "multipatch_xml_path": "filedata/five_patch_cantilever.xml",
     "multipatch_id": 0
   },
   "simulation": {
     "device": "cpu",
-    "max_epoch": 250,
+    "max_epoch": 300,
     "min_loss": 1e-6,
+    "bc_weight": 100.0,
+    "strong_dirichlet": true,
     "supervised_learning": false
   },
   "reference_simulation": {
@@ -23,7 +25,11 @@
     "young_modulus": 210.0,
     "poisson_ratio": 0.25
   },
-  "spline": {
+  "geometry_spline": {
+    "nr_ctrl_pts": 8,
+    "degree": 4
+  },
+  "solution_spline": {
     "nr_ctrl_pts": 8,
     "degree": 4
   },
@@ -39,7 +45,6 @@
     }
   },
   "multipatch_2D": {
-    "body_force": [0.0, 0.0],
     "patches": [
       {
         "patch_id": 0,
@@ -55,7 +60,34 @@
         "body_force": [0.0, 0.0],
         "boundary_conditions": {
           "force_sides": [],
-          "diri_sides": [[2, 0.1, 0.0]],
+          "diri_sides": [],
+          "tfbc_sides": [3, 4]
+        }
+      },
+      {
+        "patch_id": 2,
+        "body_force": [0.0, 0.0],
+        "boundary_conditions": {
+          "force_sides": [],
+          "diri_sides": [],
+          "tfbc_sides": [3, 4]
+        }
+      },
+      {
+        "patch_id": 3,
+        "body_force": [0.0, 0.0],
+        "boundary_conditions": {
+          "force_sides": [],
+          "diri_sides": [],
+          "tfbc_sides": [3, 4]
+        }
+      },
+      {
+        "patch_id": 4,
+        "body_force": [0.0, 0.0],
+        "boundary_conditions": {
+          "force_sides": [[2, 100.0, -100.0]],
+          "diri_sides": [],
           "tfbc_sides": [3, 4]
         }
       }

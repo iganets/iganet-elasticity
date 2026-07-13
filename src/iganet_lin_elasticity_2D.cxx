@@ -1164,8 +1164,10 @@ int main() {
         JSON_PATH = RESULT_JSON_PATH.string();
 
         // spline
-        NR_CTRL_PTS = require(j, "spline.nr_ctrl_pts").get<int64_t>();
-        DEGREE_CFG = require(j, "spline.degree").get<int>();
+        const auto solutionSplineCfg =
+            iganet_elasticity::utils::config::load_solution_spline_config(j);
+        NR_CTRL_PTS = solutionSplineCfg.nr_ctrl_pts;
+        DEGREE_CFG = solutionSplineCfg.degree;
 
         const auto patch_cfg =
             iganet_elasticity::utils::config::load_single_patch_config_2d(j);
