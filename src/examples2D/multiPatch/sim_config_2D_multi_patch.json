@@ -1,0 +1,125 @@
+{
+  "optimizer": {
+    "type": "lbfgs"
+  },
+  "geometry": {
+    "mode": "xml",
+    "multipatch_xml_path": "filedata/five_patch_cantilever.xml",
+    "multipatch_id": 0
+  },
+  "simulation": {
+    "device": "cpu",
+    "max_epoch": 5,
+    "min_loss": 1e-06,
+    "supervised_learning": false
+  },
+  "reference_simulation": {
+    "run_gs_ref_sim": false,
+    "run_coll_ref_sim": false,
+    "nr_ctrl_pts_ref": 64,
+    "degree_ref": 4
+  },
+  "material": {
+    "young_modulus": 210.0,
+    "poisson_ratio": 0.25
+  },
+  "geometry_spline": {
+    "nr_ctrl_pts": 8,
+    "degree": 4
+  },
+  "solution_spline": {
+    "nr_ctrl_pts": 8,
+    "degree": 4
+  },
+  "multipatch_2D": {
+    "patches": [
+      {
+        "patch_id": 0,
+        "body_force": [
+          0.0,
+          0.0
+        ],
+        "boundary_conditions": {
+          "force_sides": [],
+          "diri_sides": [
+            [
+              1,
+              0.0,
+              0.0
+            ]
+          ],
+          "tfbc_sides": [
+            3,
+            4
+          ]
+        }
+      },
+      {
+        "patch_id": 1,
+        "body_force": [
+          0.0,
+          0.0
+        ],
+        "boundary_conditions": {
+          "force_sides": [],
+          "diri_sides": [],
+          "tfbc_sides": [
+            3,
+            4
+          ]
+        }
+      },
+      {
+        "patch_id": 2,
+        "body_force": [
+          0.0,
+          0.0
+        ],
+        "boundary_conditions": {
+          "force_sides": [],
+          "diri_sides": [],
+          "tfbc_sides": [
+            3,
+            4
+          ]
+        }
+      },
+      {
+        "patch_id": 3,
+        "body_force": [
+          0.0,
+          0.0
+        ],
+        "boundary_conditions": {
+          "force_sides": [],
+          "diri_sides": [],
+          "tfbc_sides": [
+            3,
+            4
+          ]
+        }
+      },
+      {
+        "patch_id": 4,
+        "body_force": [
+          0.0,
+          0.0
+        ],
+        "boundary_conditions": {
+          "force_sides": [
+            [
+              2,
+              100.0,
+              -100.0
+            ]
+          ],
+          "diri_sides": [],
+          "tfbc_sides": [
+            3,
+            4
+          ]
+        }
+      }
+    ]
+  }
+}

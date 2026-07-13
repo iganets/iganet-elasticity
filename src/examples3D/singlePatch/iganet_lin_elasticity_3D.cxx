@@ -1306,8 +1306,10 @@ int main() {
         return 1;
     }
 
-    const std::filesystem::path CONFIG_PATH = repo_root / "sim_config_3D.json";
-    const std::filesystem::path RESULT_JSON_PATH = repo_root / "results" / "result.json";  // output file
+    const std::filesystem::path CONFIG_PATH =
+        repo_root / "src" / "examples3D" / "singlePatch" / "sim_config_3D_single_patch.json";
+    const std::filesystem::path RESULT_JSON_PATH =
+        repo_root / "results" / "result_iganet_lin_elasticity_3D.json";  // output file
 
     // load config
     std::ifstream file(CONFIG_PATH);
@@ -1326,7 +1328,7 @@ int main() {
 
     // run standard collocation simulation with the parameters from the config file 
     const std::string cmd =
-        "cd \"" + repo_root.string() + "\" && python3 -m std_collocation_python.run_std_coll sim_config_3D.json";
+        "cd \"" + repo_root.string() + "\" && python3 -m std_collocation_python.run_std_coll src/examples3D/singlePatch/sim_config_3D_single_patch.json";
 
     const int ret = std::system(cmd.c_str());
     if (ret != 0) {

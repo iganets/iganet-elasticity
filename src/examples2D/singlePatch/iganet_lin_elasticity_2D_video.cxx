@@ -1,6 +1,7 @@
 #include <iganet.h>
-#include <iostream>
+#include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <utils/config.hpp>
 #include <utils/paths.hpp>
 
@@ -55,30 +56,41 @@ private:
     // simulation parameters
     int MAX_EPOCH_;
     double MIN_LOSS_;
+    double BC_WEIGHT_;
+    bool STRONG_DIRICHLET_;
     int64_t NR_CTRL_PTS_;
     std::vector<int> TFBC_SIDES_;
-    std::string JSON_PATH_;
+    std::string REFERENCE_JSON_PATH_;
+    std::string VIDEO_JSON_PATH_;
     std::pair<double, double> BODY_FORCE_;
     std::vector<std::tuple<int, double, double>> FORCE_SIDES_;
     std::vector<std::tuple<int, double, double>> DIRI_SIDES_;
     bool SUPERVISED_LEARNING_;
+    iganet::StrongDirichletConstraints<double> constraints_;
+    int64_t lastVideoEpochWritten_{-1};
 
 public:
     /// @brief Constructor
     template <typename... Args>
     linear_elasticity(double lambda, double mu, bool SUPERVISED_LEARNING, int MAX_EPOCH, 
-                    double MIN_LOSS, std::pair<double, double> BODY_FORCE, std::vector<int> TFBC_SIDES,
+                    double MIN_LOSS, double BC_WEIGHT, bool STRONG_DIRICHLET,
+                    std::pair<double, double> BODY_FORCE, std::vector<int> TFBC_SIDES,
                     std::vector<std::tuple<int, double, double>> FORCE_SIDES,
                     std::vector<std::tuple<int, double, double>> DIRI_SIDES, 
-                    int64_t NR_CTRL_PTS, std::string JSON_PATH, std::vector<int64_t> &&layers, 
+                    int64_t NR_CTRL_PTS, std::string REFERENCE_JSON_PATH, std::string VIDEO_JSON_PATH,
+                    std::vector<int64_t> &&layers, 
                     std::vector<std::vector<std::any>> &&activations, Args &&...args)
         : Base( std::forward<std::vector<int64_t>>(layers),
                 std::forward<std::vector<std::vector<std::any>>>(activations),
                 std::forward<Args>(args)...),
                 lambda_(lambda), mu_(mu), SUPERVISED_LEARNING_(SUPERVISED_LEARNING), MAX_EPOCH_(MAX_EPOCH), 
-                MIN_LOSS_(MIN_LOSS), BODY_FORCE_(BODY_FORCE), TFBC_SIDES_(TFBC_SIDES), FORCE_SIDES_(FORCE_SIDES), 
-                DIRI_SIDES_(DIRI_SIDES), NR_CTRL_PTS_(NR_CTRL_PTS), JSON_PATH_(std::move(JSON_PATH)), 
-                ref_(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)) {}
+                MIN_LOSS_(MIN_LOSS), BC_WEIGHT_(BC_WEIGHT), STRONG_DIRICHLET_(STRONG_DIRICHLET),
+                BODY_FORCE_(BODY_FORCE), TFBC_SIDES_(TFBC_SIDES), FORCE_SIDES_(FORCE_SIDES), 
+                DIRI_SIDES_(DIRI_SIDES), NR_CTRL_PTS_(NR_CTRL_PTS),
+                REFERENCE_JSON_PATH_(std::move(REFERENCE_JSON_PATH)),
+                VIDEO_JSON_PATH_(std::move(VIDEO_JSON_PATH)),
+                ref_(iganet::utils::to_array(NR_CTRL_PTS, NR_CTRL_PTS)),
+                constraints_(this->template output<0>()) {}
 
     // /// @brief Returns a constant reference to the collocation points
     // auto const &collPts() const { return collPts_; }
@@ -91,50 +103,80 @@ public:
 
     /// @brief Returns a non-constant reference to the reference solution
     auto &ref() { return ref_; }
-    
-    /// @brief Writes data to a JSON file
-    void appendToJsonFile(const std::string& key, const nlohmann::json& data) {
-    
-        // create json object
-        nlohmann::json jsonData;
 
-        // try to read the JSON data from the file
-        try {
-            std::ifstream json_file_in(JSON_PATH_);
-            if (json_file_in.is_open()) {
-                json_file_in >> jsonData;
-                json_file_in.close();
-            } else {
-                std::cerr << "Warning: Could not open file for reading: " 
-                        << JSON_PATH_ << "\n";
-            }
-        } catch (const std::exception& e) {
-            std::cerr << "Error reading JSON file: " << JSON_PATH_ 
-                    << ". Exception: " << e.what() << "\n";
-        }
-
-        // add new data to the JSON object
-        try {
-            jsonData[key] = data;
-        } catch (const std::exception& e) {
-            std::cerr << "Error adding key to JSON object: " << e.what() << "\n";
+    void addStrongDirichletSide(int side, double xDispl, double yDispl) {
+        if (!STRONG_DIRICHLET_) {
             return;
         }
 
-        // write the JSON data to the file
-        try {
-            std::ofstream json_file_out(JSON_PATH_);
-            if (json_file_out.is_open()) {
-                json_file_out << jsonData.dump(1);
-                json_file_out.close();
-            } else {
-                std::cerr << "Error: Could not open file for writing: " 
-                        << JSON_PATH_ << "\n";
-            }
-        } catch (const std::exception& e) {
-            std::cerr << "Error writing JSON file: " << JSON_PATH_ 
-                    << ". Exception: " << e.what() << "\n";
+        constraints_
+            .fix_boundary(this->template output<0>(), static_cast<iganet::short_t>(side), 0, xDispl)
+            .fix_boundary(this->template output<0>(), static_cast<iganet::short_t>(side), 1, yDispl);
+    }
+
+    nlohmann::json currentControlPointsJson() const {
+        const torch::Tensor geometryAsTensor = this->template input<0>().as_tensor();
+        const torch::Tensor displacementAsTensor = this->template output<0>().as_tensor();
+
+        nlohmann::json controlPoints = nlohmann::json::array();
+        for (int64_t i = 0; i < NR_CTRL_PTS_ * NR_CTRL_PTS_; ++i) {
+            controlPoints.push_back({
+                geometryAsTensor[i].item<double>() +
+                    displacementAsTensor[i].item<double>(),
+                geometryAsTensor[i + NR_CTRL_PTS_ * NR_CTRL_PTS_].item<double>() +
+                    displacementAsTensor[i + NR_CTRL_PTS_ * NR_CTRL_PTS_].item<double>()
+            });
         }
+        return controlPoints;
+    }
+
+    void writeVideoJsonFile(const nlohmann::json& data) const {
+        std::ofstream json_file_out(VIDEO_JSON_PATH_);
+        if (!json_file_out.is_open()) {
+            throw std::runtime_error("Could not open file for writing: " + VIDEO_JSON_PATH_);
+        }
+        json_file_out << data.dump(1);
+    }
+
+    void initializeVideoJsonFile(int degree) {
+        nlohmann::json jsonData;
+        jsonData["degree"] = degree;
+        jsonData["num_ctrl_pts_per_direction"] = NR_CTRL_PTS_;
+        jsonData["initial_control_points"] = currentControlPointsJson();
+        jsonData["frames"] = nlohmann::json::array();
+        writeVideoJsonFile(jsonData);
+    }
+
+    void appendControlPointFrame(int64_t epoch) {
+        if (lastVideoEpochWritten_ == epoch) {
+            return;
+        }
+
+        nlohmann::json jsonData;
+        {
+            std::ifstream json_file_in(VIDEO_JSON_PATH_);
+            if (json_file_in.is_open()) {
+                json_file_in >> jsonData;
+            }
+        }
+
+        if (!jsonData.contains("frames") || !jsonData["frames"].is_array()) {
+            jsonData["frames"] = nlohmann::json::array();
+        }
+
+        jsonData["frames"].push_back({
+            {"epoch_index", epoch},
+            {"epoch_number", epoch + 1},
+            {"control_points", currentControlPointsJson()}
+        });
+        writeVideoJsonFile(jsonData);
+        lastVideoEpochWritten_ = epoch;
+    }
+    
+    /// @brief Writes data to a JSON file
+    void appendToJsonFile(const std::string& key, const nlohmann::json& data) {
+        (void)key;
+        (void)data;
     }
 
     /// @brief helper function to load the std collocation displacements from a JSON file
@@ -143,9 +185,9 @@ public:
         auto options = torch::TensorOptions().dtype(torch::kDouble).device(torch::kCPU);
     
         // open the JSON file
-        std::ifstream file(JSON_PATH_);
+        std::ifstream file(REFERENCE_JSON_PATH_);
         if (!file.is_open()) {
-            throw std::runtime_error("Could not open file: " + JSON_PATH_);
+            throw std::runtime_error("Could not open file: " + REFERENCE_JSON_PATH_);
         }
     
         // parse the JSON file
@@ -393,9 +435,11 @@ public:
 
     /// @brief Computes the loss function
     torch::Tensor loss(const torch::Tensor &outputs, int64_t epoch) override {
+        const torch::Tensor constrainedOutputs =
+            STRONG_DIRICHLET_ ? constraints_.apply(outputs) : outputs;
 
         // create u_ from the training's outputs
-        this->template output<0>().from_tensor(outputs);
+        this->template output<0>().from_tensor(constrainedOutputs);
 
         // pre-allocation of the loss values
         torch::Tensor totalLoss; 
@@ -819,7 +863,7 @@ public:
             // only consider BC loss if dirichlet BCs are applied
             if (!DIRI_SIDES_.empty()) {
                 // add a BC weight for penalization of the training
-                int bcWeight = 1e7;
+                const double bcWeight = BC_WEIGHT_;
                 // initialize bcLoss variable
                 bcLoss = torch::tensor(0.0, outputs.options());
 
@@ -874,7 +918,7 @@ public:
             std::ostringstream singleLossOutput;
         
             // preprocess the outputs for comparison with the std collocation solution
-            torch::Tensor modifiedOutputs = outputs * 1.0;
+            torch::Tensor modifiedOutputs = constrainedOutputs * 1.0;
         
             // create netDisplacements_ from slices of modifiedOutputs
             torch::Tensor netDisplacements_ = torch::stack({
@@ -916,7 +960,7 @@ public:
             // only consider BC loss if dirichlet BCs are applied
             if (!DIRI_SIDES_.empty()) {
                 // add a BC weight for penalization of the training
-                int bcWeight = 1e0;
+                const double bcWeight = BC_WEIGHT_;
                 // initialize bcLoss variable
                 bcLoss = torch::tensor(0.0, outputs.options());
 
@@ -971,6 +1015,8 @@ public:
         // POSTPROCESSING PREPARATION - WRITING DATA TO JSON FILE
 
         // only calculate this at the end of the simulation
+        appendControlPointFrame(epoch);
+
         if ((epoch == MAX_EPOCH_ - 1) || (totalLoss.item<double>() <= MIN_LOSS_)) {
             
             // STRESS CALCULATION
@@ -1092,8 +1138,12 @@ int main() {
         return 1;
     }
 
-    const std::filesystem::path CONFIG_PATH = repo_root / "sim_config_2D.json";
-    const std::filesystem::path RESULT_JSON_PATH = repo_root / "results" / "result.json";  // output file
+    const std::filesystem::path CONFIG_PATH =
+        repo_root / "src" / "examples2D" / "singlePatch" / "sim_config_2D_single_patch.json";
+    const std::filesystem::path REFERENCE_JSON_PATH =
+        repo_root / "results" / "result_iganet_lin_elasticity_2D.json";
+    const std::filesystem::path VIDEO_RESULT_JSON_PATH =
+        repo_root / "results" / "result_iganet_lin_elasticity_2D_video.json";
 
     // load config
     std::ifstream file(CONFIG_PATH);
@@ -1112,7 +1162,7 @@ int main() {
 
     // run standard collocation simulation with the parameters from the config file 
     const std::string cmd =
-        "cd \"" + repo_root.string() + "\" && python3 -m std_collocation_python.run_std_coll sim_config_2D.json";
+        "cd \"" + repo_root.string() + "\" && python3 -m std_collocation_python.run_std_coll src/examples2D/singlePatch/sim_config_2D_single_patch.json";
 
     const int ret = std::system(cmd.c_str());
     if (ret != 0) {
@@ -1127,8 +1177,10 @@ int main() {
     // simulation parameters
     int MAX_EPOCH = 0;
     double MIN_LOSS = 0.0;
+    double BC_WEIGHT = 1.0;
+    bool STRONG_DIRICHLET = false;
     bool SUPERVISED_LEARNING = false;
-    std::string JSON_PATH;  // output json path
+    std::string VIDEO_JSON_PATH;  // output json path
     optimizer_config_t OPTIMIZER_CFG;
 
     // reference simulation parameters
@@ -1157,11 +1209,17 @@ int main() {
         // simulation
         MAX_EPOCH = require(j, "simulation.max_epoch").get<int>();
         MIN_LOSS = require(j, "simulation.min_loss").get<double>();
+        if (j.contains("simulation") && j["simulation"].contains("bc_weight")) {
+            BC_WEIGHT = j["simulation"]["bc_weight"].get<double>();
+        }
+        if (j.contains("simulation") && j["simulation"].contains("strong_dirichlet")) {
+            STRONG_DIRICHLET = j["simulation"]["strong_dirichlet"].get<bool>();
+        }
         SUPERVISED_LEARNING = require(j, "simulation.supervised_learning").get<bool>();
         OPTIMIZER_CFG = iganet_elasticity::utils::config::load_optimizer_config(j);
 
-        // IMPORTANT: output json is fixed in results/
-        JSON_PATH = RESULT_JSON_PATH.string();
+        // IMPORTANT: video output json is fixed in results/
+        VIDEO_JSON_PATH = VIDEO_RESULT_JSON_PATH.string();
 
         // spline
         const auto solutionSplineCfg =
@@ -1212,8 +1270,9 @@ int main() {
         using linear_elasticity_t = linear_elasticity<optimizer_t, geometry_t, variable_t>;
 
         linear_elasticity_t net(//simulation parameters 
-            lambda, mu, SUPERVISED_LEARNING, MAX_EPOCH, MIN_LOSS, 
-            BODY_FORCE, TFBC_SIDES, FORCE_SIDES, DIRI_SIDES, NR_CTRL_PTS, JSON_PATH, 
+            lambda, mu, SUPERVISED_LEARNING, MAX_EPOCH, MIN_LOSS, BC_WEIGHT, STRONG_DIRICHLET,
+            BODY_FORCE, TFBC_SIDES, FORCE_SIDES, DIRI_SIDES, NR_CTRL_PTS,
+            REFERENCE_JSON_PATH.string(), VIDEO_JSON_PATH,
             // Number of neurons per layer 
             {25, 25}, 
             // Activation functions 
@@ -1228,19 +1287,15 @@ int main() {
             return std::array<real_t, 2>{BODY_FORCE.first, BODY_FORCE.second};
         });
 
-        // get the coefficients of the control points
-        torch::Tensor ctrlPtsCoeffs = net.template input<0>().as_tensor().slice(0, 0, NR_CTRL_PTS);
-        nlohmann::json ctrlPtsCoeffs_j = nlohmann::json::array();
-        for (int i = 0; i < NR_CTRL_PTS; ++i) {
-            ctrlPtsCoeffs_j.push_back({ctrlPtsCoeffs[i].item<double>()});
-        }
-        net.appendToJsonFile("net_ctrlPtsCoeffs", ctrlPtsCoeffs_j);
+        net.initializeVideoJsonFile(DEGREE);
 
         // run through all DIRI_SIDES
         for (const auto& side : DIRI_SIDES) {
             int sideNr = std::get<0>(side);
             double xDispl = std::get<1>(side);
             double yDispl = std::get<2>(side);
+
+            net.addStrongDirichletSide(sideNr, xDispl, yDispl);
 
             switch (sideNr) {
                 case 1:
@@ -1323,46 +1378,6 @@ int main() {
             << std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1)
                     .count()
             << " seconds\n";
-
-        // PROCESSING NETWORK OUTPUT FOR SPLINEPY
-
-        // get the geometry and displacement as tensors
-        torch::Tensor geometryAsTensor = net.template input<0>().as_tensor();
-        torch::Tensor displacementAsTensor = net.template output<0>().as_tensor();
-        
-        // creating collection matrix for all the control points (iganet)
-        torch::Tensor netCtrlPts = torch::zeros({NR_CTRL_PTS * NR_CTRL_PTS, 2});
-        // creating collection matrix for all the displacements (iganet)
-        torch::Tensor netDisplacements = torch::zeros({NR_CTRL_PTS * NR_CTRL_PTS, 2});
-
-        // filling the collection matrices with the values from the tensors
-        for (int i = 0; i < NR_CTRL_PTS * NR_CTRL_PTS; ++i) {
-            double x = geometryAsTensor[i].item<double>();          
-            double y = geometryAsTensor[i + NR_CTRL_PTS * NR_CTRL_PTS].item<double>();
-            netCtrlPts[i][0] = x;
-            netCtrlPts[i][1] = y;
-                
-            double ux = displacementAsTensor[i].item<double>();
-            double uy = displacementAsTensor[i + NR_CTRL_PTS * NR_CTRL_PTS].item<double>();
-            netDisplacements[i][0] = ux;
-            netDisplacements[i][1] = uy;
-        }
-
-        // deformed position of the control points
-        torch::Tensor displacedNetCtrlPts = netCtrlPts + netDisplacements;
-
-        // json objects for deformed positions
-        nlohmann::json displacedNetCtrlPts_j = nlohmann::json::array();
-        for (int i = 0; i < displacedNetCtrlPts.size(0); ++i) {
-            displacedNetCtrlPts_j.push_back({
-                displacedNetCtrlPts[i][0].item<double>(),
-                displacedNetCtrlPts[i][1].item<double>()
-            });
-        }
-
-        // write net data
-        net.appendToJsonFile("net_CtrlPts", displacedNetCtrlPts_j);
-        net.appendToJsonFile("net_Degree", DEGREE);
 
         #ifdef IGANET_WITH_GISMO
         
@@ -1488,7 +1503,7 @@ int main() {
     case optimizer_type_t::lbfgs:
         return dispatch.template operator()<torch::optim::LBFGS>();
     default:
-        std::cerr << "Unsupported optimizer selection in sim_config_2D.json\n";
+        std::cerr << "Unsupported optimizer selection in sim_config_2D_single_patch.json\n";
         return 1;
     }
 

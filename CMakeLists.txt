@@ -25,7 +25,10 @@ project(IgANet-Elasticity)
 
 add_library(iganet_elasticity_interface INTERFACE)
 add_library(iganet::elasticity ALIAS iganet_elasticity_interface)
-target_include_directories(iganet_elasticity_interface INTERFACE ${PROJECT_SOURCE_DIR}/src ${PROJECT_BINARY_DIR}/src)
+target_include_directories(iganet_elasticity_interface INTERFACE
+  ${PROJECT_SOURCE_DIR}/src
+  ${PROJECT_BINARY_DIR}/src
+)
 
 ########################################################################
 # IgANets (core)
@@ -71,7 +74,10 @@ endif()
 # Collect sources
 ########################################################################
 
-file(GLOB SOURCES CONFIGURE_DEPENDS src/*.cxx)
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS
+  src/examples2D/*.cxx
+  src/examples3D/*.cxx
+)
 
 foreach(source ${SOURCES})
 
@@ -86,7 +92,8 @@ foreach(source ${SOURCES})
   target_link_libraries(${name} PRIVATE iganet::core)
 
   target_include_directories(${name}
-    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src
+    PUBLIC
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
   )
   
 endforeach()

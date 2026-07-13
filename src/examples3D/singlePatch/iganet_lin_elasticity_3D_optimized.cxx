@@ -1,5 +1,5 @@
 
-#include "lin_elasticity_net.hpp"
+#include "headers/lin_elasticity_net.hpp"
 
 #include <utils/config.hpp>
 #include <utils/paths.hpp>
@@ -274,8 +274,9 @@ int main() {
         return 1;
     }
 
-    const auto CONFIG_PATH  = repoRoot / "sim_config_3D.json";
-    const auto RESULT_PATH  = repoRoot / "results" / "result.json";
+    const auto CONFIG_PATH  = repoRoot / "src" / "examples3D" / "singlePatch" /
+                              "sim_config_3D_single_patch.json";
+    const auto RESULT_PATH  = repoRoot / "results" / "result_iganet_lin_elasticity_3D_optimized.json";
 
     std::ifstream cfgFile(CONFIG_PATH);
     if (!cfgFile) {
@@ -291,7 +292,7 @@ int main() {
     }
 
     const std::string cmd =
-        "cd \"" + repoRoot.string() + "\" && python3 -m std_collocation_python.run_std_coll sim_config_3D.json";
+        "cd \"" + repoRoot.string() + "\" && python3 -m std_collocation_python.run_std_coll src/examples3D/singlePatch/sim_config_3D_single_patch.json";
     const int ret = std::system(cmd.c_str());
     if (ret != 0) {
         std::cerr << "ERROR: python reference run failed. system() returned "
