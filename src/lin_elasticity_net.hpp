@@ -133,23 +133,23 @@ private:
     /// @brief Builds physical face coordinates for one boundary side.
     std::array<torch::Tensor, 3> getFaceBoundaryPoints(int sideNr) const {
         switch (sideNr) {
-            case 1: { auto Y=std::get<0>(collPts_.second)[0];
-                      auto Z=std::get<0>(collPts_.second)[1];
+            case 1: { auto Y=std::get<0>(collPts_.boundary())[0];
+                      auto Z=std::get<0>(collPts_.boundary())[1];
                       return {torch::zeros_like(Y), Y, Z}; }
-            case 2: { auto Y=std::get<1>(collPts_.second)[0];
-                      auto Z=std::get<1>(collPts_.second)[1];
+            case 2: { auto Y=std::get<1>(collPts_.boundary())[0];
+                      auto Z=std::get<1>(collPts_.boundary())[1];
                       return {torch::ones_like(Y), Y, Z}; }
-            case 3: { auto X=std::get<2>(collPts_.second)[0];
-                      auto Z=std::get<2>(collPts_.second)[1];
+            case 3: { auto X=std::get<2>(collPts_.boundary())[0];
+                      auto Z=std::get<2>(collPts_.boundary())[1];
                       return {X, torch::zeros_like(X), Z}; }
-            case 4: { auto X=std::get<3>(collPts_.second)[0];
-                      auto Z=std::get<3>(collPts_.second)[1];
+            case 4: { auto X=std::get<3>(collPts_.boundary())[0];
+                      auto Z=std::get<3>(collPts_.boundary())[1];
                       return {X, torch::ones_like(X), Z}; }
-            case 5: { auto X=std::get<4>(collPts_.second)[0];
-                      auto Y=std::get<4>(collPts_.second)[1];
+            case 5: { auto X=std::get<4>(collPts_.boundary())[0];
+                      auto Y=std::get<4>(collPts_.boundary())[1];
                       return {X, Y, torch::zeros_like(X)}; }
-            case 6: { auto X=std::get<5>(collPts_.second)[0];
-                      auto Y=std::get<5>(collPts_.second)[1];
+            case 6: { auto X=std::get<5>(collPts_.boundary())[0];
+                      auto Y=std::get<5>(collPts_.boundary())[1];
                       return {X, Y, torch::ones_like(X)}; }
             default:
                 throw std::invalid_argument("Boundary side must be 1..6.");
@@ -287,10 +287,10 @@ public:
         interiorCollPts_ = Base::template collPts<0>(iganet::collPts::greville_interior);
 
         nrCollPts_ = static_cast<int>(
-            std::cbrt(static_cast<double>(std::get<0>(collPts_)[0].size(0))));
+            std::cbrt(static_cast<double>(collPts_.interior()[0].size(0))));
 
         torch::Tensor collPtsCoeffs =
-            std::get<0>(collPts_)[0].slice(0, 0, nrCollPts_);
+            collPts_.interior()[0].slice(0, 0, nrCollPts_);
         nlohmann::json collPtsCoeffs_j = nlohmann::json::array();
         for (int i = 0; i < collPtsCoeffs.size(0); ++i)
             collPtsCoeffs_j.push_back({collPtsCoeffs[i].item<double>()});
@@ -299,28 +299,28 @@ public:
 
         var_knot_indices_ =
             Base::template output<0>().template find_knot_indices<iganet::functionspace::interior>(
-                collPts_.first);
+                collPts_.interior());
         var_coeff_indices_ =
             Base::template output<0>().template find_coeff_indices<iganet::functionspace::interior>(
                 var_knot_indices_);
 
         var_knot_indices_interior_ =
             Base::template output<0>().template find_knot_indices<iganet::functionspace::interior>(
-                interiorCollPts_.first);
+                interiorCollPts_.interior());
         var_coeff_indices_interior_ =
             Base::template output<0>().template find_coeff_indices<iganet::functionspace::interior>(
                 var_knot_indices_interior_);
 
         G_knot_indices_ =
             this->template input<0>().template find_knot_indices<iganet::functionspace::interior>(
-                collPts_.first);
+                collPts_.interior());
         G_coeff_indices_ =
             this->template input<0>().template find_coeff_indices<iganet::functionspace::interior>(
                 G_knot_indices_);
 
         G_knot_indices_interior_ =
             this->template input<0>().template find_knot_indices<iganet::functionspace::interior>(
-                interiorCollPts_.first);
+                interiorCollPts_.interior());
         G_coeff_indices_interior_ =
             this->template input<0>().template find_coeff_indices<iganet::functionspace::interior>(
                 G_knot_indices_interior_);
@@ -473,7 +473,7 @@ public:
         }
 
         auto hessianColl = this->template output<0>().ihess(
-            this->template input<0>(), interiorCollPts_.first,
+            this->template input<0>(), interiorCollPts_.interior(),
             var_knot_indices_interior_, var_coeff_indices_interior_,
             G_knot_indices_interior_,   G_coeff_indices_interior_);
 
@@ -542,8 +542,8 @@ public:
             if (!DIRI_SIDES_.empty()) {
                 const double bcWeight = 1e5;
                 bcLoss = torch::tensor(0.0, outputs.options());
-                auto u_bdr = this->template output<0>().template eval<iganet::functionspace::boundary>(collPts_.second);
-                auto bdr   = ref_.template eval<iganet::functionspace::boundary>(collPts_.second);
+                auto u_bdr = this->template output<0>().template eval<iganet::functionspace::boundary>(collPts_.boundary());
+                auto bdr   = ref_.template eval<iganet::functionspace::boundary>(collPts_.boundary());
                 for (const auto& side : DIRI_SIDES_) {
                     int sNr = std::get<0>(side);
                     switch (sNr) {
@@ -601,8 +601,8 @@ public:
             if (!DIRI_SIDES_.empty()) {
                 const double bcWeight = 1e0;
                 bcLoss = torch::tensor(0.0, outputs.options());
-                auto u_bdr = this->template output<0>().template eval<iganet::functionspace::boundary>(collPts_.second);
-                auto bdr   = ref_.template eval<iganet::functionspace::boundary>(collPts_.second);
+                auto u_bdr = this->template output<0>().template eval<iganet::functionspace::boundary>(collPts_.boundary());
+                auto bdr   = ref_.template eval<iganet::functionspace::boundary>(collPts_.boundary());
                 for (const auto& side : DIRI_SIDES_) {
                     int sNr = std::get<0>(side);
                     switch (sNr) {
@@ -633,7 +633,7 @@ public:
 
         // Jacobian at all collocation points.
         auto jacobian = this->template output<0>().ijac(
-            this->template input<0>(), collPts_.first,
+            this->template input<0>(), collPts_.interior(),
             var_knot_indices_,  var_coeff_indices_,
             G_knot_indices_,    G_coeff_indices_);
 
@@ -686,10 +686,10 @@ public:
 
         // Collocation points: reference and deformed positions.
         torch::Tensor cpRef = torch::stack(
-            {std::get<0>(collPts_.first),
-             std::get<1>(collPts_.first),
-             std::get<2>(collPts_.first)}, 1);
-        auto displ = this->template output<0>().eval(collPts_.first);
+            {std::get<0>(collPts_.interior()),
+             std::get<1>(collPts_.interior()),
+             std::get<2>(collPts_.interior())}, 1);
+        auto displ = this->template output<0>().eval(collPts_.interior());
         torch::Tensor cpDispl = torch::stack({*displ[0],*displ[1],*displ[2]}, 1);
 
         nlohmann::json collPtsFirst_j      = nlohmann::json::array();
@@ -711,7 +711,7 @@ public:
 
         // Stress divergence for residual analysis.
         auto hessianColl = this->template output<0>().ihess(
-            this->template input<0>(), interiorCollPts_.first,
+            this->template input<0>(), interiorCollPts_.interior(),
             var_knot_indices_interior_, var_coeff_indices_interior_,
             G_knot_indices_interior_,   G_coeff_indices_interior_);
 

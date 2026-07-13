@@ -134,33 +134,33 @@ private:
     std::array<torch::Tensor, 3> getFaceBoundaryPoints(int sideNr) const {
         switch (sideNr) {
             case 1: { // x = 0, local coords = (y,z)
-                at::Tensor Y = std::get<0>(collPts_.second)[0];
-                at::Tensor Z = std::get<0>(collPts_.second)[1];
+                at::Tensor Y = std::get<0>(collPts_.boundary())[0];
+                at::Tensor Z = std::get<0>(collPts_.boundary())[1];
                 return {torch::zeros_like(Y), Y, Z};
             }
             case 2: { // x = 1, local coords = (y,z)
-                at::Tensor Y = std::get<1>(collPts_.second)[0];
-                at::Tensor Z = std::get<1>(collPts_.second)[1];
+                at::Tensor Y = std::get<1>(collPts_.boundary())[0];
+                at::Tensor Z = std::get<1>(collPts_.boundary())[1];
                 return {torch::ones_like(Y), Y, Z};
             }
             case 3: { // y = 0, local coords = (x,z)
-                at::Tensor X = std::get<2>(collPts_.second)[0];
-                at::Tensor Z = std::get<2>(collPts_.second)[1];
+                at::Tensor X = std::get<2>(collPts_.boundary())[0];
+                at::Tensor Z = std::get<2>(collPts_.boundary())[1];
                 return {X, torch::zeros_like(X), Z};
             }
             case 4: { // y = 1, local coords = (x,z)
-                at::Tensor X = std::get<3>(collPts_.second)[0];
-                at::Tensor Z = std::get<3>(collPts_.second)[1];
+                at::Tensor X = std::get<3>(collPts_.boundary())[0];
+                at::Tensor Z = std::get<3>(collPts_.boundary())[1];
                 return {X, torch::ones_like(X), Z};
             }
             case 5: { // z = 0, local coords = (x,y)
-                at::Tensor X = std::get<4>(collPts_.second)[0];
-                at::Tensor Y = std::get<4>(collPts_.second)[1];
+                at::Tensor X = std::get<4>(collPts_.boundary())[0];
+                at::Tensor Y = std::get<4>(collPts_.boundary())[1];
                 return {X, Y, torch::zeros_like(X)};
             }
             case 6: { // z = 1, local coords = (x,y)
-                at::Tensor X = std::get<5>(collPts_.second)[0];
-                at::Tensor Y = std::get<5>(collPts_.second)[1];
+                at::Tensor X = std::get<5>(collPts_.boundary())[0];
+                at::Tensor Y = std::get<5>(collPts_.boundary())[1];
                 return {X, Y, torch::ones_like(X)};
             }
             default:
@@ -501,8 +501,8 @@ public:
 
 
             // WARNING, only works for equal number of control points in x, y, and z direction
-            nrCollPts_ = static_cast<int>(std::cbrt(std::get<0>(collPts_)[0].size(0)));
-            torch::Tensor collPtsCoeffs = std::get<0>(collPts_)[0].slice(0, 0, nrCollPts_);
+            nrCollPts_ = static_cast<int>(std::cbrt(collPts_.interior()[0].size(0)));
+            torch::Tensor collPtsCoeffs = collPts_.interior()[0].slice(0, 0, nrCollPts_);
             nlohmann::json collPtsCoeffs_j = nlohmann::json::array();
             for (int i = 0; i < collPtsCoeffs.size(0); ++i) {
                 collPtsCoeffs_j.push_back({collPtsCoeffs[i].item<double>()});
@@ -513,14 +513,14 @@ public:
             // precompute indices (output)
             var_knot_indices_ =
                 Base::template output<0>().template find_knot_indices<iganet::functionspace::interior>(
-                    collPts_.first);
+                    collPts_.interior());
             var_coeff_indices_ =
                 Base::template output<0>().template find_coeff_indices<iganet::functionspace::interior>(
                     var_knot_indices_);
 
             var_knot_indices_interior_ =
                 Base::template output<0>().template find_knot_indices<iganet::functionspace::interior>(
-                        interiorCollPts_.first);
+                        interiorCollPts_.interior());
             var_coeff_indices_interior_ =
                 Base::template output<0>().template find_coeff_indices<iganet::functionspace::interior>(
                     var_knot_indices_interior_);
@@ -528,14 +528,14 @@ public:
             // precompute indices (geometry/input)
             G_knot_indices_ =
                 this->template input<0>().template find_knot_indices<iganet::functionspace::interior>(
-                    collPts_.first);
+                    collPts_.interior());
             G_coeff_indices_ =
                 this->template input<0>().template find_coeff_indices<iganet::functionspace::interior>(
                     G_knot_indices_);
 
             G_knot_indices_interior_ = 
                 this->template input<0>().template find_knot_indices<iganet::functionspace::interior>(
-                    interiorCollPts_.first);
+                    interiorCollPts_.interior());
             G_coeff_indices_interior_ =
                 this->template input<0>().template find_coeff_indices<iganet::functionspace::interior>(
                     G_knot_indices_interior_);
@@ -593,33 +593,33 @@ public:
 {
                 switch (side) {
                     case 1: { // x = 0, local coords = (y,z)
-                        at::Tensor Y = std::get<0>(collPts_.second)[0];
-                        at::Tensor Z = std::get<0>(collPts_.second)[1];
+                        at::Tensor Y = std::get<0>(collPts_.boundary())[0];
+                        at::Tensor Z = std::get<0>(collPts_.boundary())[1];
                         return {torch::zeros_like(Y), Y, Z};
                     }
                     case 2: { // x = 1, local coords = (y,z)
-                        at::Tensor Y = std::get<1>(collPts_.second)[0];
-                        at::Tensor Z = std::get<1>(collPts_.second)[1];
+                        at::Tensor Y = std::get<1>(collPts_.boundary())[0];
+                        at::Tensor Z = std::get<1>(collPts_.boundary())[1];
                         return {torch::ones_like(Y), Y, Z};
                     }
                     case 3: { // y = 0, local coords = (x,z)
-                        at::Tensor X = std::get<2>(collPts_.second)[0];
-                        at::Tensor Z = std::get<2>(collPts_.second)[1];
+                        at::Tensor X = std::get<2>(collPts_.boundary())[0];
+                        at::Tensor Z = std::get<2>(collPts_.boundary())[1];
                         return {X, torch::zeros_like(X), Z};
                     }
                     case 4: { // y = 1, local coords = (x,z)
-                        at::Tensor X = std::get<3>(collPts_.second)[0];
-                        at::Tensor Z = std::get<3>(collPts_.second)[1];
+                        at::Tensor X = std::get<3>(collPts_.boundary())[0];
+                        at::Tensor Z = std::get<3>(collPts_.boundary())[1];
                         return {X, torch::ones_like(X), Z};
                     }
                     case 5: { // z = 0, local coords = (x,y)
-                        at::Tensor X = std::get<4>(collPts_.second)[0];
-                        at::Tensor Y = std::get<4>(collPts_.second)[1];
+                        at::Tensor X = std::get<4>(collPts_.boundary())[0];
+                        at::Tensor Y = std::get<4>(collPts_.boundary())[1];
                         return {X, Y, torch::zeros_like(X)};
                     }
                     case 6: { // z = 1, local coords = (x,y)
-                        at::Tensor X = std::get<5>(collPts_.second)[0];
-                        at::Tensor Y = std::get<5>(collPts_.second)[1];
+                        at::Tensor X = std::get<5>(collPts_.boundary())[0];
+                        at::Tensor Y = std::get<5>(collPts_.boundary())[1];
                         return {X, Y, torch::ones_like(X)};
                     }
                     default:
@@ -816,7 +816,7 @@ public:
 //----------- LINEAR ELASTICITY EQUATION------------------------------------------------------------------------
 
         // calculation of the second derivatives of the displacements (u)
-        auto hessianColl = this->template output<0>().ihess(this->template input<0>(), interiorCollPts_.first, 
+        auto hessianColl = this->template output<0>().ihess(this->template input<0>(), interiorCollPts_.interior(), 
             var_knot_indices_interior_, var_coeff_indices_interior_,
             G_knot_indices_interior_, G_coeff_indices_interior_);
 
@@ -952,9 +952,9 @@ public:
                 bcLoss = torch::tensor(0.0,outputs.options());
 
                 // evaluation of the displacements at the boundary points
-                auto u_bdr = this->template output<0>().template eval<iganet::functionspace::boundary>(collPts_.second);
+                auto u_bdr = this->template output<0>().template eval<iganet::functionspace::boundary>(collPts_.boundary());
                 // evaluation of the displacements at the reference boundary points
-                auto bdr = ref_.template eval<iganet::functionspace::boundary>(collPts_.second);
+                auto bdr = ref_.template eval<iganet::functionspace::boundary>(collPts_.boundary());
 
                 auto masked_side_loss = [&](const torch::Tensor& u0,
                             const torch::Tensor& u1,
@@ -1081,9 +1081,9 @@ public:
                 bcLoss = torch::tensor(0.0,outputs.options());
 
                 // evaluation of the displacements at the boundary points
-                auto u_bdr = this->template output<0>().template eval<iganet::functionspace::boundary>(collPts_.second);
+                auto u_bdr = this->template output<0>().template eval<iganet::functionspace::boundary>(collPts_.boundary());
                 // evaluation of the displacements at the reference boundary points
-                auto bdr = ref_.template eval<iganet::functionspace::boundary>(collPts_.second);
+                auto bdr = ref_.template eval<iganet::functionspace::boundary>(collPts_.boundary());
                 auto masked_side_loss = [&](const torch::Tensor& u0,
                             const torch::Tensor& u1,
                             const torch::Tensor& u2,
@@ -1161,7 +1161,7 @@ public:
             // STRESS CALCULATION
 
             // calculate the jacobian of the displacements (u) at the collocation points
-            auto jacobian = this->template output<0>().ijac(this->template input<0>(), collPts_.first, var_knot_indices_, 
+            auto jacobian = this->template output<0>().ijac(this->template input<0>(), collPts_.interior(), var_knot_indices_, 
                 var_coeff_indices_, G_knot_indices_, G_coeff_indices_);
             
             auto ux_x = *jacobian[0];
@@ -1246,8 +1246,8 @@ public:
 
             // create a tensor of the collocation points
             torch::Tensor collPtsFirstAsTensor = torch::stack(
-                {std::get<0>(collPts_.first), std::get<1>(collPts_.first), std::get<2>(collPts_.first)}, 1);
-            auto displacementOfCollPts = this->template output<0>().eval(collPts_.first);
+                {std::get<0>(collPts_.interior()), std::get<1>(collPts_.interior()), std::get<2>(collPts_.interior())}, 1);
+            auto displacementOfCollPts = this->template output<0>().eval(collPts_.interior());
             torch::Tensor displacementAsTensor = torch::stack(
                 {*(displacementOfCollPts[0]), *(displacementOfCollPts[1]), *(displacementOfCollPts[2])}, 1);
 
@@ -1326,7 +1326,7 @@ int main() {
 
     // run standard collocation simulation with the parameters from the config file 
     const std::string cmd =
-        "cd \"" + repo_root.string() + "\" && python3 std_collocation_python/run_std_coll.py sim_config_3D.json";
+        "cd \"" + repo_root.string() + "\" && python3 -m std_collocation_python.run_std_coll sim_config_3D.json";
 
     const int ret = std::system(cmd.c_str());
     if (ret != 0) {

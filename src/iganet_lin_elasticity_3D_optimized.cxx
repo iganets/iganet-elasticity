@@ -291,7 +291,7 @@ int main() {
     }
 
     const std::string cmd =
-        "cd \"" + repoRoot.string() + "\" && python3 std_collocation_python/run_std_coll.py sim_config_3D.json";
+        "cd \"" + repoRoot.string() + "\" && python3 -m std_collocation_python.run_std_coll sim_config_3D.json";
     const int ret = std::system(cmd.c_str());
     if (ret != 0) {
         std::cerr << "ERROR: python reference run failed. system() returned "
