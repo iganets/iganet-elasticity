@@ -1,8 +1,11 @@
 #pragma once
 
 #include <nlohmann/json.hpp>
+#include <array>
 #include <stdexcept>
 #include <string>
+#include <tuple>
+#include <vector>
 
 namespace iganet_elasticity::utils::config {
 
@@ -30,6 +33,121 @@ inline const nlohmann::json& require(const nlohmann::json& j, const std::string&
     }
 
     return *cur;
+}
+
+enum class optimizer_type { lbfgs, adam };
+
+struct optimizer_config {
+    optimizer_type type{optimizer_type::lbfgs};
+};
+
+struct boundary_value_2d {
+    int side{0};
+    double x{0.0};
+    double y{0.0};
+};
+
+struct patch_config_2d {
+    int patch_id{0};
+    std::array<double, 2> body_force{0.0, 0.0};
+    std::vector<boundary_value_2d> force_sides;
+    std::vector<boundary_value_2d> diri_sides;
+    std::vector<int> tfbc_sides;
+};
+
+inline std::vector<boundary_value_2d>
+read_boundary_values_2d(const nlohmann::json& values) {
+    std::vector<boundary_value_2d> result;
+    for (const auto& value : values) {
+        result.push_back(boundary_value_2d{
+            value.at(0).get<int>(),
+            value.at(1).get<double>(),
+            value.at(2).get<double>()});
+    }
+    return result;
+}
+
+inline optimizer_config load_optimizer_config(const nlohmann::json& j) {
+    optimizer_config cfg;
+    if (!j.contains("optimizer")) {
+        return cfg;
+    }
+
+    const auto& oj = j["optimizer"];
+    if (!oj.contains("type")) {
+        return cfg;
+    }
+
+    const auto type = oj["type"].get<std::string>();
+    if (type == "lbfgs" || type == "LBFGS") {
+        cfg.type = optimizer_type::lbfgs;
+    } else if (type == "adam" || type == "Adam" || type == "ADAM") {
+        cfg.type = optimizer_type::adam;
+    } else {
+        throw std::runtime_error(
+            "Unsupported optimizer.type '" + type + "'. Expected 'lbfgs' or 'adam'.");
+    }
+
+    return cfg;
+}
+
+inline patch_config_2d load_legacy_single_patch_config_2d(const nlohmann::json& j) {
+    patch_config_2d cfg;
+    cfg.patch_id = 0;
+
+    if (j.contains("body_force")) {
+        const auto& bf = require(j, "body_force");
+        cfg.body_force = {bf.at(0).get<double>(), bf.at(1).get<double>()};
+    }
+
+    if (j.contains("boundary_conditions")) {
+        const auto& bc = j["boundary_conditions"];
+        if (bc.contains("force_sides")) {
+            cfg.force_sides = read_boundary_values_2d(bc["force_sides"]);
+        }
+        if (bc.contains("diri_sides")) {
+            cfg.diri_sides = read_boundary_values_2d(bc["diri_sides"]);
+        }
+        if (bc.contains("tfbc_sides")) {
+            cfg.tfbc_sides = bc["tfbc_sides"].get<std::vector<int>>();
+        }
+    }
+
+    return cfg;
+}
+
+inline std::vector<patch_config_2d> load_patch_configs_2d(const nlohmann::json& j) {
+    if (!j.contains("patches_2d")) {
+        return {load_legacy_single_patch_config_2d(j)};
+    }
+
+    std::vector<patch_config_2d> result;
+    for (const auto& entry : j["patches_2d"]) {
+        patch_config_2d cfg;
+        cfg.patch_id = require(entry, "patch_id").get<int>();
+
+        if (entry.contains("body_force")) {
+            const auto& bf = entry["body_force"];
+            cfg.body_force = {bf.at(0).get<double>(), bf.at(1).get<double>()};
+        }
+
+        if (entry.contains("boundary_conditions")) {
+            const auto& bc = entry["boundary_conditions"];
+            if (bc.contains("force_sides")) {
+                cfg.force_sides = read_boundary_values_2d(bc["force_sides"]);
+            }
+            if (bc.contains("diri_sides")) {
+                cfg.diri_sides = read_boundary_values_2d(bc["diri_sides"]);
+            }
+            if (bc.contains("tfbc_sides")) {
+                cfg.tfbc_sides = bc["tfbc_sides"].get<std::vector<int>>();
+            }
+        }
+
+        result.push_back(std::move(cfg));
+    }
+
+    return result;
 }
 
 } // namespace iganet_elasticity::utils::config
