@@ -35,8 +35,10 @@ struct ParametricConfig {
     double youngModulus{210.0};
     double poissonRatio{0.25};
     int maxEpoch{50};
-    int degree{3};
-    int ncoeffs{5};
+    int geometryDegree{3};
+    int geometryNcoeffs{5};
+    int solutionDegree{3};
+    int solutionNcoeffs{5};
     optimizer_config_t optimizer;
     std::vector<patch_config_2d_t> patchConfigs;
 };
@@ -58,15 +60,26 @@ ParametricConfig loadConfig(const nlohmann::json& j) {
     cfg.optimizer = iganet_elasticity::utils::config::load_optimizer_config(j);
     cfg.patchConfigs = iganet_elasticity::utils::config::load_patch_configs_2d(j);
 
-    if (j.contains("spline")) {
-        cfg.degree = require(j, "spline.degree").get<int>();
-        cfg.ncoeffs = require(j, "spline.nr_ctrl_pts").get<int>();
+    const auto geometrySplineCfg =
+        iganet_elasticity::utils::config::load_geometry_spline_config(j);
+    const auto solutionSplineCfg =
+        iganet_elasticity::utils::config::load_solution_spline_config(j);
+    cfg.geometryDegree = geometrySplineCfg.degree;
+    cfg.geometryNcoeffs = geometrySplineCfg.nr_ctrl_pts;
+    cfg.solutionDegree = solutionSplineCfg.degree;
+    cfg.solutionNcoeffs = solutionSplineCfg.nr_ctrl_pts;
+
+    if (cfg.geometryDegree != cfg.solutionDegree ||
+        cfg.geometryNcoeffs != cfg.solutionNcoeffs) {
+        throw std::runtime_error(
+            "2D multipatch example currently assumes isoparametric spaces: "
+            "geometry_spline and solution_spline must match");
     }
 
-    if (cfg.degree < 1) {
+    if (cfg.solutionDegree < 1) {
         throw std::runtime_error("2D multipatch degree must be >= 1");
     }
-    if (cfg.ncoeffs <= cfg.degree) {
+    if (cfg.solutionNcoeffs <= cfg.solutionDegree) {
         throw std::runtime_error("2D multipatch nr_ctrl_pts must be larger than degree");
     }
     if (cfg.maxEpoch <= 0) {
@@ -210,8 +223,10 @@ multipatch_t makeTwoSquareGeometry(const ParametricConfig& cfg,
     multipatch_t geometry;
     geometry.set_matching_tolerance(1e-6, 1e-6);
 
-    geometry.addPatch(makeSquarePatch(0.0, 1.0, 0.0, 1.0, cfg.ncoeffs, cfg.degree, options), 0);
-    geometry.addPatch(makeSquarePatch(1.0, 2.0, 0.0, 1.0, cfg.ncoeffs, cfg.degree, options), 1);
+    geometry.addPatch(makeSquarePatch(0.0, 1.0, 0.0, 1.0,
+                                      cfg.geometryNcoeffs, cfg.geometryDegree, options), 0);
+    geometry.addPatch(makeSquarePatch(1.0, 2.0, 0.0, 1.0,
+                                      cfg.geometryNcoeffs, cfg.geometryDegree, options), 1);
     geometry.addInterface(interface(0, iganet::side::east, 1, iganet::side::west));
 
     geometry.addBoundary({0, iganet::side::west, sideLabel(iganet::side::west)});
@@ -836,20 +851,20 @@ private:
                     interfaceTractionLoss + torch::mse_loss(t1 + t2, torch::zeros_like(t1));
             }
 
-            const auto r1 = strong_form_residual(
-                iface.patch1, displacementTensor, iface.eval1, iface.invJ1, iface.hessG1,
-                iface.body1);
-            const auto r2 = strong_form_residual(
-                iface.patch2, displacementTensor, iface.eval2, iface.invJ2, iface.hessG2,
-                iface.body2);
-            if (iface.eval1.numeval > 0) {
-                collocationLoss =
-                    collocationLoss + torch::mse_loss(r1, torch::zeros_like(r1));
-            }
-            if (iface.eval2.numeval > 0) {
-                collocationLoss =
-                    collocationLoss + torch::mse_loss(r2, torch::zeros_like(r2));
-            }
+            // const auto r1 = strong_form_residual(
+            //     iface.patch1, displacementTensor, iface.eval1, iface.invJ1, iface.hessG1,
+            //     iface.body1);
+            // const auto r2 = strong_form_residual(
+            //     iface.patch2, displacementTensor, iface.eval2, iface.invJ2, iface.hessG2,
+            //     iface.body2);
+            // if (iface.eval1.numeval > 0) {
+            //     collocationLoss =
+            //         collocationLoss + torch::mse_loss(r1, torch::zeros_like(r1));
+            // }
+            // if (iface.eval2.numeval > 0) {
+            //     collocationLoss =
+            //         collocationLoss + torch::mse_loss(r2, torch::zeros_like(r2));
+            // }
         }
 
         return {
@@ -1067,7 +1082,7 @@ int main() {
                 : run.template operator()<torch::optim::LBFGS>();
 
         nlohmann::json summary;
-        summary["example"] = "two_parametric_squares";
+        summary["example"] = "multipatch_parametric_2d";
         summary["geometry_mode"] = (mode == GeometryMode::Xml ? "xml" : "parametric");
         summary["device"] = computeDevice.str();
         if (xmlPath.has_value()) {
@@ -1095,7 +1110,7 @@ int main() {
         result["multipatch_elasticity_2d"] = summary;
         out << result.dump(1);
 
-        std::cout << "\n=== PARAMETRIC TWO-SQUARE MULTIPATCH 2D ===\n"
+        std::cout << "\n=== PARAMETRIC MULTIPATCH 2D ===\n"
                   << "config: " << configPath << "\n"
                   << "device: " << computeDevice.str() << "\n"
                   << "patches: " << geometryOut.npatches() << "\n"

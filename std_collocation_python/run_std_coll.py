@@ -81,6 +81,10 @@ def detect_dimension(cfg: dict) -> int:
         return 2
     if "multipatch_2D" in cfg:
         return 2
+    if "single_patch_3D" in cfg:
+        return 3
+    if "multipatch_3D" in cfg:
+        return 3
     if "patches_2d" in cfg:
         return 2
 
@@ -181,8 +185,8 @@ def load_patch_config_2d(cfg: dict) -> dict:
 def run_2d(cfg: dict, out_path: str) -> None:
     E = float(get_required(cfg, "material.young_modulus"))
     nu = float(get_required(cfg, "material.poisson_ratio"))
-    ncp = int(get_required(cfg, "spline.nr_ctrl_pts"))
-    degree = int(get_required(cfg, "spline.degree"))
+    ncp = int(get_required(cfg, "solution_spline.nr_ctrl_pts") if "solution_spline" in cfg else get_required(cfg, "spline.nr_ctrl_pts"))
+    degree = int(get_required(cfg, "solution_spline.degree") if "solution_spline" in cfg else get_required(cfg, "spline.degree"))
 
     patch_cfg = load_patch_config_2d(cfg)
     bf_raw = require_vector_length(
@@ -260,21 +264,38 @@ def run_2d(cfg: dict, out_path: str) -> None:
 def run_3d(cfg: dict, out_path: str) -> None:
     E = float(get_required(cfg, "material.young_modulus"))
     nu = float(get_required(cfg, "material.poisson_ratio"))
-    ncp = int(get_required(cfg, "spline.nr_ctrl_pts"))
-    degree = int(get_required(cfg, "spline.degree"))
+    ncp = int(get_required(cfg, "solution_spline.nr_ctrl_pts") if "solution_spline" in cfg else get_required(cfg, "spline.nr_ctrl_pts"))
+    degree = int(get_required(cfg, "solution_spline.degree") if "solution_spline" in cfg else get_required(cfg, "spline.degree"))
 
-    bf_raw = require_vector_length(get_required(cfg, "body_force"), 3, "body_force")
+    sp_cfg = get_optional(cfg, "single_patch_3D", None)
+    cfg_3d = sp_cfg if sp_cfg is not None else cfg
+
+    bf_raw = require_vector_length(
+        get_required(cfg_3d, "body_force"),
+        3,
+        "single_patch_3D.body_force" if sp_cfg is not None else "body_force",
+    )
     body_force = (float(bf_raw[0]), float(bf_raw[1]), float(bf_raw[2]))
 
-    bc_cfg = get_required(cfg, "boundary_conditions")
+    bc_cfg = get_required(cfg_3d, "boundary_conditions")
     force_sides = []
     for i, side in enumerate(get_optional(bc_cfg, "force_sides", [])):
-        s = require_vector_length(side, 4, f"boundary_conditions.force_sides[{i}]")
+        path = (
+            f"single_patch_3D.boundary_conditions.force_sides[{i}]"
+            if sp_cfg is not None
+            else f"boundary_conditions.force_sides[{i}]"
+        )
+        s = require_vector_length(side, 4, path)
         force_sides.append((int(s[0]), float(s[1]), float(s[2]), float(s[3])))
 
     diri_sides = []
     for i, side in enumerate(get_optional(bc_cfg, "diri_sides", [])):
-        s = require_vector_length(side, 4, f"boundary_conditions.diri_sides[{i}]")
+        path = (
+            f"single_patch_3D.boundary_conditions.diri_sides[{i}]"
+            if sp_cfg is not None
+            else f"boundary_conditions.diri_sides[{i}]"
+        )
+        s = require_vector_length(side, 4, path)
         diri_sides.append((int(s[0]), float(s[1]), float(s[2]), float(s[3])))
 
     tfbc_sides = [int(s) for s in get_optional(bc_cfg, "tfbc_sides", [])]

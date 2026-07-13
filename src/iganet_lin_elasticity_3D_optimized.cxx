@@ -320,18 +320,22 @@ int main() {
         maxEpoch          = require(j, "simulation.max_epoch").get<int>();
         minLoss           = require(j, "simulation.min_loss").get<double>();
         supervisedLearning= require(j, "simulation.supervised_learning").get<bool>();
-        nrCtrlPts         = require(j, "spline.nr_ctrl_pts").get<int64_t>();
-        degreeCfg         = require(j, "spline.degree").get<int>();
+        const auto solutionSplineCfg =
+            iganet_elasticity::utils::config::load_solution_spline_config(j);
+        nrCtrlPts         = solutionSplineCfg.nr_ctrl_pts;
+        degreeCfg         = solutionSplineCfg.degree;
 
-        for (const auto& fs : require(j, "boundary_conditions.force_sides"))
+        const auto& singlePatchCfg = require(j, "single_patch_3D");
+
+        for (const auto& fs : require(singlePatchCfg, "boundary_conditions.force_sides"))
             forceSides.emplace_back(fs[0].get<int>(), fs[1].get<double>(),
                                     fs[2].get<double>(), fs[3].get<double>());
-        for (const auto& ds : require(j, "boundary_conditions.diri_sides"))
+        for (const auto& ds : require(singlePatchCfg, "boundary_conditions.diri_sides"))
             diriSides.emplace_back(ds[0].get<int>(), ds[1].get<double>(),
                                    ds[2].get<double>(), ds[3].get<double>());
-        tfbcSides = require(j, "boundary_conditions.tfbc_sides").get<std::vector<int>>();
+        tfbcSides = require(singlePatchCfg, "boundary_conditions.tfbc_sides").get<std::vector<int>>();
 
-        const auto& bf = require(j, "body_force");
+        const auto& bf = require(singlePatchCfg, "body_force");
         bodyForce = {bf[0].get<double>(), bf[1].get<double>(), bf[2].get<double>()};
 
         if (j.contains("reference_simulation")) {
@@ -352,8 +356,27 @@ int main() {
     std::string xmlGeometryId;
     if (geoMode == GeometryMode::Xml) {
         try {
-            const std::string xmlPathCfg = require(j, "geometry.xml_path").get<std::string>();
-            xmlGeometryId = require(j, "geometry.xml_id").get<std::string>();
+            const auto& gj = require(j, "geometry");
+            std::string xmlPathCfg;
+
+            if (gj.contains("xml_path")) {
+                xmlPathCfg = gj["xml_path"].get<std::string>();
+            } else if (gj.contains("multipatch_xml_path")) {
+                xmlPathCfg = gj["multipatch_xml_path"].get<std::string>();
+            } else {
+                throw std::runtime_error(
+                    "Missing required config key: geometry.xml_path or geometry.multipatch_xml_path");
+            }
+
+            if (gj.contains("xml_id")) {
+                xmlGeometryId = gj["xml_id"].get<std::string>();
+            } else if (gj.contains("multipatch_id")) {
+                xmlGeometryId = std::to_string(gj["multipatch_id"].get<int>());
+            } else {
+                throw std::runtime_error(
+                    "Missing required config key: geometry.xml_id or geometry.multipatch_id");
+            }
+
             xmlPath = std::filesystem::path(xmlPathCfg);
             if (xmlPath.is_relative()) {
                 xmlPath = repoRoot / xmlPath;

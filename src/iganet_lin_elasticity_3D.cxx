@@ -1376,25 +1376,29 @@ int main() {
         JSON_PATH = RESULT_JSON_PATH.string();
 
         // spline
-        NR_CTRL_PTS = require(j, "spline.nr_ctrl_pts").get<int64_t>();
-        DEGREE_CFG = require(j, "spline.degree").get<int>();
+        const auto solutionSplineCfg =
+            iganet_elasticity::utils::config::load_solution_spline_config(j);
+        NR_CTRL_PTS = solutionSplineCfg.nr_ctrl_pts;
+        DEGREE_CFG = solutionSplineCfg.degree;
+
+        const auto& singlePatchCfg = j.contains("single_patch_3D") ? j["single_patch_3D"] : j;
 
         // BCs
         FORCE_SIDES.clear();
-        for (const auto& fsj : require(j, "boundary_conditions.force_sides")) {
+        for (const auto& fsj : require(singlePatchCfg, "boundary_conditions.force_sides")) {
             FORCE_SIDES.emplace_back(fsj.at(0).get<int>(), fsj.at(1).get<double>(), fsj.at(2).get<double>(), fsj.at(3).get<double>());
         }
 
         DIRI_SIDES.clear();
-        for (const auto& dsj : require(j, "boundary_conditions.diri_sides")) {
+        for (const auto& dsj : require(singlePatchCfg, "boundary_conditions.diri_sides")) {
             DIRI_SIDES.emplace_back(dsj.at(0).get<int>(), dsj.at(1).get<double>(), dsj.at(2).get<double>(), dsj.at(3).get<double>());
         }
 
-        TFBC_SIDES = require(j, "boundary_conditions.tfbc_sides").get<std::vector<int>>();
+        TFBC_SIDES = require(singlePatchCfg, "boundary_conditions.tfbc_sides").get<std::vector<int>>();
 
         // body force
         {
-            const auto& bf = require(j, "body_force");
+            const auto& bf = require(singlePatchCfg, "body_force");
             BODY_FORCE[0] = bf.at(0).get<double>();
             BODY_FORCE[1] = bf.at(1).get<double>();
             BODY_FORCE[2] = bf.at(2).get<double>();
