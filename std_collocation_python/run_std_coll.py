@@ -77,6 +77,10 @@ def resolve_out_path(out_path_from_cfg: str) -> str:
 
 
 def detect_dimension(cfg: dict) -> int:
+    if "single_patch_2D" in cfg:
+        return 2
+    if "multipatch_2D" in cfg:
+        return 2
     if "patches_2d" in cfg:
         return 2
 
@@ -165,6 +169,9 @@ def update_json_payload(out_path: str, payload: dict) -> None:
 
 
 def load_patch_config_2d(cfg: dict) -> dict:
+    if "single_patch_2D" in cfg:
+        return get_required(cfg, "single_patch_2D")
+
     patches = get_required(cfg, "patches_2d")
     if not isinstance(patches, list) or not patches:
         raise ValueError("Config key 'patches_2d' must contain at least one patch entry.")
@@ -178,18 +185,32 @@ def run_2d(cfg: dict, out_path: str) -> None:
     degree = int(get_required(cfg, "spline.degree"))
 
     patch_cfg = load_patch_config_2d(cfg)
-    bf_raw = require_vector_length(patch_cfg["body_force"], 2, "patches_2d[0].body_force")
+    bf_raw = require_vector_length(
+        patch_cfg["body_force"],
+        2,
+        "single_patch_2D.body_force" if "single_patch_2D" in cfg else "patches_2d[0].body_force",
+    )
     body_force = (float(bf_raw[0]), float(bf_raw[1]))
 
     bc_cfg = get_required(patch_cfg, "boundary_conditions")
     force_sides = []
     for i, side in enumerate(get_optional(bc_cfg, "force_sides", [])):
-        s = require_vector_length(side, 3, f"patches_2d[0].boundary_conditions.force_sides[{i}]")
+        path = (
+            f"single_patch_2D.boundary_conditions.force_sides[{i}]"
+            if "single_patch_2D" in cfg
+            else f"patches_2d[0].boundary_conditions.force_sides[{i}]"
+        )
+        s = require_vector_length(side, 3, path)
         force_sides.append((int(s[0]), float(s[1]), float(s[2])))
 
     diri_sides = []
     for i, side in enumerate(get_optional(bc_cfg, "diri_sides", [])):
-        s = require_vector_length(side, 3, f"patches_2d[0].boundary_conditions.diri_sides[{i}]")
+        path = (
+            f"single_patch_2D.boundary_conditions.diri_sides[{i}]"
+            if "single_patch_2D" in cfg
+            else f"patches_2d[0].boundary_conditions.diri_sides[{i}]"
+        )
+        s = require_vector_length(side, 3, path)
         diri_sides.append((int(s[0]), float(s[1]), float(s[2])))
 
     tfbc_sides = [int(s) for s in get_optional(bc_cfg, "tfbc_sides", [])]
