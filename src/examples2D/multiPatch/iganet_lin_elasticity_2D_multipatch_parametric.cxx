@@ -1,4 +1,4 @@
-#include "lin_elasticity_utils.hpp"
+#include "headers/lin_elasticity_utils.hpp"
 
 #include <iganet.h>
 
@@ -995,8 +995,10 @@ int main() {
         return 1;
     }
 
-    const auto configPath = repoRoot / "sim_config_2D.json";
-    const auto resultPath = repoRoot / "results" / "result_multipatch_2D_parametric.json";
+    const auto configPath = repoRoot / "src" / "examples2D" / "multiPatch" /
+                            "sim_config_2D_multi_patch.json";
+    const auto resultPath =
+        repoRoot / "results" / "result_iganet_lin_elasticity_2D_multipatch_parametric.json";
     nlohmann::json j;
     {
         std::ifstream cfgFile(configPath);

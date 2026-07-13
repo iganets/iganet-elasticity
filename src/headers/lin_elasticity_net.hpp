@@ -9,7 +9,7 @@
 //       Contains the full post-processing block that originally lived
 //       at the end of loss() under if(epoch == MAX_EPOCH_-1).
 
-#include "lin_elasticity_utils.hpp"
+#include "headers/lin_elasticity_utils.hpp"
 #include <iganet.h>
 
 #include <algorithm>
