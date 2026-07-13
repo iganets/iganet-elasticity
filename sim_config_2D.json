@@ -1,6 +1,14 @@
 {
+  "optimizer": {
+    "type": "lbfgs"
+  },
+  "geometry": {
+    "mode": "xml",
+    "multipatch_xml_path": "filedata/two_patch_smoke.xml",
+    "multipatch_id": 0
+  },
   "simulation": {
-    "max_epoch": 100,
+    "max_epoch": 30,
     "min_loss": 1e-6,
     "supervised_learning": false
   },
@@ -18,13 +26,24 @@
     "nr_ctrl_pts": 8,
     "degree": 4
   },
-  "boundary_conditions": {
-    "force_sides": [],
-    "diri_sides": [
-      [1, 0.0, 0.0],
-      [2, 0.1, 0.0]
-    ],
-    "tfbc_sides": [3, 4]
-  },
-  "body_force": [0.0, 0.0]
+  "patches_2d": [
+    {
+      "patch_id": 0,
+      "body_force": [0.0, 0.0],
+      "boundary_conditions": {
+        "force_sides": [],
+        "diri_sides": [[1, 0.0, 0.0]],
+        "tfbc_sides": [3, 4]
+      }
+    },
+    {
+      "patch_id": 1,
+      "body_force": [0.0, 0.0],
+      "boundary_conditions": {
+        "force_sides": [],
+        "diri_sides": [[2, 0.1, 0.0]],
+        "tfbc_sides": [3, 4]
+      }
+    }
+  ]
 }
