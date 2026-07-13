@@ -7,6 +7,7 @@
 
 #include <any>
 #include <array>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -40,6 +41,8 @@ struct ParametricConfig {
     std::vector<patch_config_2d_t> patchConfigs;
 };
 
+enum class ComputeDeviceMode { Auto, CPU, CUDA };
+
 ParametricConfig loadConfig(const nlohmann::json& j) {
     ParametricConfig cfg;
 
@@ -71,6 +74,45 @@ ParametricConfig loadConfig(const nlohmann::json& j) {
     }
 
     return cfg;
+}
+
+ComputeDeviceMode parseComputeDeviceMode(const nlohmann::json& j) {
+    if (!j.contains("simulation") || !j["simulation"].contains("device")) {
+        return ComputeDeviceMode::Auto;
+    }
+
+    const auto mode = j["simulation"]["device"].get<std::string>();
+    if (mode == "auto" || mode == "AUTO") {
+        return ComputeDeviceMode::Auto;
+    }
+    if (mode == "cpu" || mode == "CPU") {
+        return ComputeDeviceMode::CPU;
+    }
+    if (mode == "cuda" || mode == "CUDA" || mode == "gpu" || mode == "GPU") {
+        return ComputeDeviceMode::CUDA;
+    }
+
+    throw std::runtime_error(
+        "Unsupported simulation.device '" + mode +
+        "'. Expected 'auto', 'cpu', or 'cuda'.");
+}
+
+torch::Device resolveComputeDevice(const nlohmann::json& j) {
+    switch (parseComputeDeviceMode(j)) {
+        case ComputeDeviceMode::CPU:
+            return torch::Device(torch::kCPU);
+        case ComputeDeviceMode::CUDA:
+            if (!torch::cuda::is_available()) {
+                throw std::runtime_error(
+                    "simulation.device requested CUDA, but torch::cuda::is_available() is false");
+            }
+            return torch::Device(torch::kCUDA);
+        case ComputeDeviceMode::Auto:
+            return torch::cuda::is_available() ? torch::Device(torch::kCUDA)
+                                               : torch::Device(torch::kCPU);
+    }
+
+    throw std::runtime_error("Unhandled compute device mode");
 }
 
 std::filesystem::path resolveXmlPath(const std::filesystem::path& repoRoot,
@@ -193,6 +235,26 @@ multipatch_t makeXmlGeometry(const std::filesystem::path& xmlPath,
     return geometry;
 }
 
+void moveMultipatchToDevice(multipatch_t& geometry, torch::Device device) {
+    for (std::size_t p = 0; p < geometry.npatches(); ++p) {
+        const auto& patch = geometry.patch(p);
+        const std::array<iganet::short_t, 2> degrees{
+            patch.degree(0), patch.degree(1)};
+        const std::array<std::vector<real_t>, 2> knots{
+            iganet::detail::tensor_to_vector<real_t>(patch.knots(0)),
+            iganet::detail::tensor_to_vector<real_t>(patch.knots(1))};
+
+        patch_t movedPatch(
+            degrees,
+            knots,
+            iganet::init::zeros,
+            iganet::Options<real_t>{}.device(device));
+        movedPatch.from_tensor(patch.as_tensor().to(device));
+        geometry.patches()[p] = std::make_shared<patch_t>(std::move(movedPatch));
+    }
+    geometry.build_dof_map();
+}
+
 std::size_t resolvePatchIndex(const multipatch_t& geometry, int patchId) {
     for (std::size_t p = 0; p < geometry.npatches(); ++p) {
         const int xmlId = geometry.patch_xml_id(p);
@@ -259,58 +321,6 @@ torch::Tensor grevilleLine(const patch_t& patch,
     return torch::tensor(line, torch::TensorOptions().dtype(torch::kFloat64).device(device));
 }
 
-template <typename HasSideFn>
-iganet::utils::TensorArray<2> buildSideCollocationPoints(
-    const patch_t& patch,
-    int side,
-    bool trimCorners,
-    torch::Device device,
-    HasSideFn&& hasOccupiedSide,
-    bool reverseDirection = false) {
-    auto line = grevilleLine(
-        patch,
-        (side == iganet::side::west || side == iganet::side::east) ? 1 : 0,
-        false,
-        device);
-
-    int64_t begin = 0;
-    int64_t end = line.size(0);
-    if (trimCorners) {
-        switch (side) {
-            case iganet::side::west:
-            case iganet::side::east:
-                if (hasOccupiedSide(iganet::side::south)) begin += 1;
-                if (hasOccupiedSide(iganet::side::north)) end -= 1;
-                break;
-            case iganet::side::south:
-            case iganet::side::north:
-                if (hasOccupiedSide(iganet::side::west)) begin += 1;
-                if (hasOccupiedSide(iganet::side::east)) end -= 1;
-                break;
-            default:
-                throw std::runtime_error("Unsupported 2D boundary side.");
-        }
-    }
-
-    line = line.slice(0, begin, end);
-    if (reverseDirection) {
-        line = torch::flip(line, {0});
-    }
-
-    switch (side) {
-        case iganet::side::west:
-            return {torch::zeros({line.size(0)}, line.options()), line};
-        case iganet::side::east:
-            return {torch::ones({line.size(0)}, line.options()), line};
-        case iganet::side::south:
-            return {line, torch::zeros({line.size(0)}, line.options())};
-        case iganet::side::north:
-            return {line, torch::ones({line.size(0)}, line.options())};
-        default:
-            throw std::runtime_error("Unsupported 2D boundary side.");
-    }
-}
-
 template <typename EvalXi0, typename EvalXi1>
 torch::Tensor stackParametricJacobian(const EvalXi0& dx,
                                       const EvalXi1& dy) {
@@ -349,6 +359,43 @@ public:
     using base_t = iganet::IgANet<Optimizer, std::tuple<multipatch_t>, std::tuple<multipatch_t>>;
     using base_t::inputs;
     using base_t::outputs;
+    using PreparedPointSet = typename patch_t::PreparedEvaluation;
+    using CollocationData = typename iganet::CollPtsHelper<multipatch_t>::type;
+
+    struct PatchResidualCache {
+        std::size_t patchIndex{0};
+        PreparedPointSet eval;
+        torch::Tensor body;
+        torch::Tensor J;
+        torch::Tensor invJ;
+        std::array<torch::Tensor, 2> hessG;
+    };
+
+    struct BoundaryTractionCache {
+        std::size_t patchIndex{0};
+        iganet::short_t side{0};
+        PreparedPointSet eval;
+        torch::Tensor target;
+        torch::Tensor J;
+        torch::Tensor invJ;
+    };
+
+    struct InterfaceCache {
+        std::size_t patch1{0};
+        iganet::short_t side1{0};
+        PreparedPointSet eval1;
+        torch::Tensor body1;
+        torch::Tensor J1;
+        torch::Tensor invJ1;
+        std::array<torch::Tensor, 2> hessG1;
+        std::size_t patch2{0};
+        iganet::short_t side2{0};
+        PreparedPointSet eval2;
+        torch::Tensor body2;
+        torch::Tensor J2;
+        torch::Tensor invJ2;
+        std::array<torch::Tensor, 2> hessG2;
+    };
 
     struct LossParts {
         torch::Tensor total;
@@ -380,10 +427,26 @@ public:
             options);
         this->net_->to(options.device(), options.dtype(), true);
         this->opt_ = std::make_unique<Optimizer>(this->net_->parameters());
+        collocationData_ =
+            iganet::CollPtsHelper<multipatch_t>::collPts(iganet::collPts::greville_interior,
+                                                         this->geometry());
 
         lambda_ = (cfg_.youngModulus * cfg_.poissonRatio) /
                   ((1.0 + cfg_.poissonRatio) * (1.0 - 2.0 * cfg_.poissonRatio));
         mu_ = cfg_.youngModulus / (2.0 * (1.0 + cfg_.poissonRatio));
+
+        const auto prepStart = std::chrono::steady_clock::now();
+        prepare_caches();
+        const auto prepEnd = std::chrono::steady_clock::now();
+        preparationSeconds_ =
+            std::chrono::duration<double>(prepEnd - prepStart).count();
+
+        std::cout << "Preparation"
+                  << " | seconds " << std::setw(12) << preparationSeconds_
+                  << " | interior_sets " << patchResidualCaches_.size()
+                  << " | traction_sets " << tractionCaches_.size()
+                  << " | interface_sets " << interfaceCaches_.size()
+                  << "\n";
     }
 
     bool epoch(int64_t epochIndex) override {
@@ -419,6 +482,10 @@ public:
 
     const auto& history() const noexcept {
         return history_;
+    }
+
+    double preparation_seconds() const noexcept {
+        return preparationSeconds_;
     }
 
     const auto& geometry() const {
@@ -472,61 +539,242 @@ private:
         return false;
     }
 
-    iganet::utils::TensorArray<2> build_side_collocation_points(
-        std::size_t patchIndex,
-        int side,
-        bool trimCorners,
-        bool reverseDirection = false,
-        bool includeTfbcAsOccupied = false) const {
-        return buildSideCollocationPoints(
-            geometry().patch(patchIndex),
-            side,
-            trimCorners,
-            options_.device(),
-            [&](int testSide) {
-                if (hasDirichletSide(patchIndex, testSide) ||
-                    hasForceSide(patchIndex, testSide)) {
-                    return true;
-                }
-                if (includeTfbcAsOccupied) {
-                    return hasTfbcSide(patchIndex, testSide);
-                }
-                return false;
-            },
-            reverseDirection);
+    bool side_is_occupied(std::size_t patchIndex,
+                          int side,
+                          bool includeTfbcAsOccupied) const {
+        if (hasDirichletSide(patchIndex, side) || hasForceSide(patchIndex, side)) {
+            return true;
+        }
+        return includeTfbcAsOccupied && hasTfbcSide(patchIndex, side);
     }
 
-    torch::Tensor compute_patch_pde_loss(
+    iganet::utils::TensorArray<2> trim_side_collocation_points(
         std::size_t patchIndex,
-        const torch::Tensor& displacementTensor) const {
-        auto G = geometry().patch(patchIndex);
-        const auto xi = toDevice(G.greville(true), options_.device());
+        int side,
+        iganet::utils::TensorArray<2> xi,
+        bool includeTfbcAsOccupied) const {
+        if (xi[0].numel() == 0) {
+            return xi;
+        }
+
+        int64_t begin = 0;
+        int64_t end = xi[0].size(0);
+        switch (side) {
+            case iganet::side::west:
+            case iganet::side::east:
+                if (side_is_occupied(patchIndex, iganet::side::south, includeTfbcAsOccupied)) {
+                    begin += 1;
+                }
+                if (side_is_occupied(patchIndex, iganet::side::north, includeTfbcAsOccupied)) {
+                    end -= 1;
+                }
+                break;
+            case iganet::side::south:
+            case iganet::side::north:
+                if (side_is_occupied(patchIndex, iganet::side::west, includeTfbcAsOccupied)) {
+                    begin += 1;
+                }
+                if (side_is_occupied(patchIndex, iganet::side::east, includeTfbcAsOccupied)) {
+                    end -= 1;
+                }
+                break;
+            default:
+                throw std::runtime_error("Unsupported 2D boundary side.");
+        }
+
+        if (end < begin) {
+            end = begin;
+        }
+
+        for (auto& x : xi) {
+            x = x.slice(0, begin, end);
+        }
+        return xi;
+    }
+
+    iganet::utils::TensorArray<2> boundary_collocation_points(
+        const typename multipatch_t::boundary_type& boundary,
+        bool includeTfbcAsOccupied) const {
+        for (const auto& [candidate, xi] : collocationData_.boundary()) {
+            if (candidate.patch == boundary.patch && candidate.side == boundary.side) {
+                return trim_side_collocation_points(
+                    boundary.patch,
+                    boundary.side,
+                    toDevice(xi, options_.device()),
+                    includeTfbcAsOccupied);
+            }
+        }
+        throw std::runtime_error("Could not find requested boundary collocation set");
+    }
+
+    std::pair<iganet::utils::TensorArray<2>, iganet::utils::TensorArray<2>>
+    interface_collocation_points(const interface_t& iface) const {
+        for (const auto& [candidate, xis] : collocationData_.interfaces) {
+            if (candidate.patch1 == iface.patch1 && candidate.side1 == iface.side1 &&
+                candidate.patch2 == iface.patch2 && candidate.side2 == iface.side2) {
+                auto xi1 = trim_side_collocation_points(
+                    iface.patch1, iface.side1, toDevice(xis.first, options_.device()), true);
+                auto xi2 = trim_side_collocation_points(
+                    iface.patch2, iface.side2, toDevice(xis.second, options_.device()), true);
+                return {std::move(xi1), std::move(xi2)};
+            }
+        }
+        throw std::runtime_error("Could not find requested interface collocation set");
+    }
+
+    torch::Tensor make_body_tensor(std::size_t patchIndex) const {
         const auto patchBodyForce = body_force(patchIndex);
-        const auto body = torch::tensor(
+        return torch::tensor(
             {patchBodyForce[0], patchBodyForce[1]}, options_).view({1, 2});
-        const auto residual =
-            strong_form_residual(patchIndex, displacementTensor, xi, body);
-        return torch::mse_loss(residual, torch::zeros_like(residual));
+    }
+
+    PreparedPointSet prepare_point_set(std::size_t patchIndex,
+                                       const iganet::utils::TensorArray<2>& xi) const {
+        const auto G = geometry().patch(patchIndex);
+        return G.template prepare_evaluation<
+            iganet::deriv::dx,
+            iganet::deriv::dy,
+            iganet::deriv::dx ^ 2,
+            iganet::deriv::dx + iganet::deriv::dy,
+            iganet::deriv::dy ^ 2>(xi);
+    }
+
+    std::tuple<torch::Tensor, torch::Tensor, std::array<torch::Tensor, 2>>
+    prepare_geometry_terms(std::size_t patchIndex, const PreparedPointSet& cache) const {
+        if (cache.numeval == 0) {
+            return {
+                torch::empty({0, 2, 2}, options_),
+                torch::empty({0, 2, 2}, options_),
+                {torch::empty({0, 2, 2}, options_), torch::empty({0, 2, 2}, options_)}};
+        }
+
+        const auto G = geometry().patch(patchIndex);
+        const auto gdx = G.template eval_from_prepared<iganet::deriv::dx>(cache);
+        const auto gdy = G.template eval_from_prepared<iganet::deriv::dy>(cache);
+        const auto J = stackParametricJacobian(gdx, gdy);
+        const auto invJ = torch::linalg_inv(J);
+
+        const auto gxx = G.template eval_from_prepared<iganet::deriv::dx ^ 2>(cache);
+        const auto gxy =
+            G.template eval_from_prepared<iganet::deriv::dx + iganet::deriv::dy>(cache);
+        const auto gyy = G.template eval_from_prepared<iganet::deriv::dy ^ 2>(cache);
+        const auto hessG = stackParametricHessians(gxx, gxy, gyy);
+        return {J, invJ, hessG};
+    }
+
+    void prepare_caches() {
+        patchResidualCaches_.clear();
+        tractionCaches_.clear();
+        interfaceCaches_.clear();
+
+        patchResidualCaches_.reserve(geometry().npatches());
+        for (std::size_t patchIndex = 0; patchIndex < geometry().npatches(); ++patchIndex) {
+            auto xi = toDevice(collocationData_.interior()[patchIndex], options_.device());
+            auto eval = prepare_point_set(patchIndex, xi);
+            auto [J, invJ, hessG] = prepare_geometry_terms(patchIndex, eval);
+            PatchResidualCache cache;
+            cache.patchIndex = patchIndex;
+            cache.eval = std::move(eval);
+            cache.body = make_body_tensor(patchIndex);
+            cache.J = std::move(J);
+            cache.invJ = std::move(invJ);
+            cache.hessG = std::move(hessG);
+            patchResidualCaches_.push_back(std::move(cache));
+        }
+
+        for (const auto& patchCfg : cfg_.patchConfigs) {
+            const auto patchIndex = static_cast<std::size_t>(patchCfg.patch_id);
+            for (const auto side : patchCfg.tfbc_sides) {
+                auto xi = boundary_collocation_points(
+                    {patchIndex, static_cast<iganet::short_t>(side), ""}, false);
+                auto eval = prepare_point_set(patchIndex, xi);
+                auto [J, invJ, hessG] = prepare_geometry_terms(patchIndex, eval);
+                BoundaryTractionCache cache;
+                cache.patchIndex = patchIndex;
+                cache.side = static_cast<iganet::short_t>(side);
+                cache.eval = std::move(eval);
+                cache.target = torch::zeros({1, 2}, options_);
+                cache.J = std::move(J);
+                cache.invJ = std::move(invJ);
+                tractionCaches_.push_back(std::move(cache));
+            }
+
+            for (const auto& entry : patchCfg.force_sides) {
+                auto xi = boundary_collocation_points(
+                    {patchIndex, static_cast<iganet::short_t>(entry.side), ""}, false);
+                auto eval = prepare_point_set(patchIndex, xi);
+                auto [J, invJ, hessG] = prepare_geometry_terms(patchIndex, eval);
+                BoundaryTractionCache cache;
+                cache.patchIndex = patchIndex;
+                cache.side = static_cast<iganet::short_t>(entry.side);
+                cache.eval = std::move(eval);
+                cache.target = torch::tensor({entry.x, entry.y}, options_).view({1, 2});
+                cache.J = std::move(J);
+                cache.invJ = std::move(invJ);
+                tractionCaches_.push_back(std::move(cache));
+            }
+        }
+
+        interfaceCaches_.reserve(geometry().ninterfaces());
+        for (const auto& iface : geometry().interfaces()) {
+            auto [xi1, xi2] = interface_collocation_points(iface);
+            auto eval1 = prepare_point_set(iface.patch1, xi1);
+            auto eval2 = prepare_point_set(iface.patch2, xi2);
+            auto [J1, invJ1, hessG1] = prepare_geometry_terms(iface.patch1, eval1);
+            auto [J2, invJ2, hessG2] = prepare_geometry_terms(iface.patch2, eval2);
+            InterfaceCache cache;
+            cache.patch1 = iface.patch1;
+            cache.side1 = iface.side1;
+            cache.eval1 = std::move(eval1);
+            cache.body1 = make_body_tensor(iface.patch1);
+            cache.J1 = std::move(J1);
+            cache.invJ1 = std::move(invJ1);
+            cache.hessG1 = std::move(hessG1);
+            cache.patch2 = iface.patch2;
+            cache.side2 = iface.side2;
+            cache.eval2 = std::move(eval2);
+            cache.body2 = make_body_tensor(iface.patch2);
+            cache.J2 = std::move(J2);
+            cache.invJ2 = std::move(invJ2);
+            cache.hessG2 = std::move(hessG2);
+            interfaceCaches_.push_back(std::move(cache));
+        }
+    }
+
+    torch::Tensor evaluate_parametric_gradient(
+        const patch_t& U,
+        const PreparedPointSet& cache) const {
+        const auto udx = U.template eval_from_prepared<iganet::deriv::dx>(cache);
+        const auto udy = U.template eval_from_prepared<iganet::deriv::dy>(cache);
+        return stackParametricJacobian(udx, udy);
+    }
+
+    std::array<torch::Tensor, 2> evaluate_parametric_hessians(
+        const patch_t& U,
+        const PreparedPointSet& cache) const {
+        const auto uxx = U.template eval_from_prepared<iganet::deriv::dx ^ 2>(cache);
+        const auto uxy =
+            U.template eval_from_prepared<iganet::deriv::dx + iganet::deriv::dy>(cache);
+        const auto uyy = U.template eval_from_prepared<iganet::deriv::dy ^ 2>(cache);
+        auto hess = stackParametricHessians(uxx, uxy, uyy);
+        return {std::move(hess[0]), std::move(hess[1])};
     }
 
     torch::Tensor strong_form_residual(
         std::size_t patchIndex,
         const torch::Tensor& displacementTensor,
-        const iganet::utils::TensorArray<2>& xi,
+        const PreparedPointSet& cache,
+        const torch::Tensor& invJ,
+        const std::array<torch::Tensor, 2>& hessG,
         const torch::Tensor& body) const {
-        auto G = geometry().patch(patchIndex);
-        auto U = localPatchWithTensor(displacement(), patchIndex, displacementTensor);
-        const auto gdx = G.template eval<iganet::deriv::dx>(xi);
-        const auto gdy = G.template eval<iganet::deriv::dy>(xi);
-        const auto udx = U.template eval<iganet::deriv::dx>(xi);
-        const auto udy = U.template eval<iganet::deriv::dy>(xi);
-        const auto J = stackParametricJacobian(gdx, gdy);
-        const auto invJ = torch::linalg_inv(J);
-        const auto gradUxi = stackParametricJacobian(udx, udy);
-        const auto gradU = torch::matmul(gradUxi, invJ);
+        if (cache.numeval == 0) {
+            return torch::empty({0, 2}, options_);
+        }
 
-        const auto hessG = parametricHessians(G, xi);
-        const auto hessUxi = parametricHessians(U, xi);
+        auto U = localPatchWithTensor(displacement(), patchIndex, displacementTensor);
+        const auto gradUxi = evaluate_parametric_gradient(U, cache);
+        const auto gradU = torch::matmul(gradUxi, invJ);
+        const auto hessUxi = evaluate_parametric_hessians(U, cache);
         std::array<torch::Tensor, 2> hessU;
         for (iganet::short_t c = 0; c < 2; ++c) {
             auto corrected = hessUxi[c].clone();
@@ -557,65 +805,51 @@ private:
         auto tractionLoss = torch::zeros({}, options_);
         auto interfaceTractionLoss = torch::zeros({}, options_);
 
-        for (std::size_t patchIndex = 0; patchIndex < geometry().npatches(); ++patchIndex) {
-            collocationLoss =
-                collocationLoss + compute_patch_pde_loss(patchIndex, displacementTensor);
-        }
-
-        for (const auto& patchCfg : cfg_.patchConfigs) {
-            const auto patchIndex = static_cast<std::size_t>(patchCfg.patch_id);
-            for (const auto side : patchCfg.tfbc_sides) {
-                const auto xi = build_side_collocation_points(patchIndex, side, true);
-                const auto traction =
-                    traction_on_boundary(patchIndex, static_cast<iganet::short_t>(side),
-                                         displacementTensor, xi);
-                tractionLoss = tractionLoss +
-                               torch::mse_loss(traction, torch::zeros_like(traction));
+        for (const auto& cache : patchResidualCaches_) {
+            if (cache.eval.numeval == 0) {
+                continue;
             }
-        }
-
-        for (const auto& patchCfg : cfg_.patchConfigs) {
-            const auto patchIndex = static_cast<std::size_t>(patchCfg.patch_id);
-            for (const auto& entry : patchCfg.force_sides) {
-                const int side = entry.side;
-                const auto target =
-                    torch::tensor({entry.x, entry.y}, options_).view({1, 2});
-                const auto xi = build_side_collocation_points(patchIndex, side, true);
-                const auto traction =
-                    traction_on_boundary(patchIndex, static_cast<iganet::short_t>(side),
-                                         displacementTensor, xi);
-                tractionLoss = tractionLoss +
-                               torch::mse_loss(traction, target.repeat({traction.size(0), 1}));
-            }
-        }
-
-        for (const auto& iface : geometry().interfaces()) {
-            const auto xi1 = build_side_collocation_points(
-                iface.patch1, iface.side1, true, false, true);
-            const auto xi2 = build_side_collocation_points(
-                iface.patch2, iface.side2, true, false, true);
-            const auto t1 = traction_on_boundary(
-                iface.patch1, iface.side1, displacementTensor, xi1);
-            const auto t2 = traction_on_boundary(
-                iface.patch2, iface.side2, displacementTensor, xi2);
-            interfaceTractionLoss =
-                interfaceTractionLoss + torch::mse_loss(t1 + t2, torch::zeros_like(t1));
-
-            const auto body1 = body_force(iface.patch1);
-            const auto body2 = body_force(iface.patch2);
-            const auto r1 = strong_form_residual(
-                iface.patch1,
-                displacementTensor,
-                xi1,
-                torch::tensor({body1[0], body1[1]}, options_).view({1, 2}));
-            const auto r2 = strong_form_residual(
-                iface.patch2,
-                displacementTensor,
-                xi2,
-                torch::tensor({body2[0], body2[1]}, options_).view({1, 2}));
+            const auto residual = strong_form_residual(
+                cache.patchIndex, displacementTensor, cache.eval, cache.invJ, cache.hessG,
+                cache.body);
             collocationLoss = collocationLoss +
-                              torch::mse_loss(r1, torch::zeros_like(r1)) +
-                              torch::mse_loss(r2, torch::zeros_like(r2));
+                              torch::mse_loss(residual, torch::zeros_like(residual));
+        }
+
+        for (const auto& cache : tractionCaches_) {
+            if (cache.eval.numeval == 0) {
+                continue;
+            }
+            const auto traction = traction_on_boundary(
+                cache.patchIndex, cache.side, displacementTensor, cache.eval, cache.invJ);
+            tractionLoss = tractionLoss + torch::mse_loss(
+                traction, cache.target.repeat({traction.size(0), 1}));
+        }
+
+        for (const auto& iface : interfaceCaches_) {
+            if (iface.eval1.numeval > 0 && iface.eval2.numeval > 0) {
+                const auto t1 = traction_on_boundary(
+                    iface.patch1, iface.side1, displacementTensor, iface.eval1, iface.invJ1);
+                const auto t2 = traction_on_boundary(
+                    iface.patch2, iface.side2, displacementTensor, iface.eval2, iface.invJ2);
+                interfaceTractionLoss =
+                    interfaceTractionLoss + torch::mse_loss(t1 + t2, torch::zeros_like(t1));
+            }
+
+            const auto r1 = strong_form_residual(
+                iface.patch1, displacementTensor, iface.eval1, iface.invJ1, iface.hessG1,
+                iface.body1);
+            const auto r2 = strong_form_residual(
+                iface.patch2, displacementTensor, iface.eval2, iface.invJ2, iface.hessG2,
+                iface.body2);
+            if (iface.eval1.numeval > 0) {
+                collocationLoss =
+                    collocationLoss + torch::mse_loss(r1, torch::zeros_like(r1));
+            }
+            if (iface.eval2.numeval > 0) {
+                collocationLoss =
+                    collocationLoss + torch::mse_loss(r2, torch::zeros_like(r2));
+            }
         }
 
         return {
@@ -628,17 +862,14 @@ private:
     torch::Tensor traction_on_boundary(std::size_t patchIndex,
                                        iganet::short_t side,
                                        const torch::Tensor& displacementTensor,
-                                       const iganet::utils::TensorArray<2>& xi) const {
-        auto G = geometry().patch(patchIndex);
-        auto U = localPatchWithTensor(displacement(), patchIndex, displacementTensor);
+                                       const PreparedPointSet& cache,
+                                       const torch::Tensor& invJ) const {
+        if (cache.numeval == 0) {
+            return torch::empty({0, 2}, options_);
+        }
 
-        const auto gdx = G.template eval<iganet::deriv::dx>(xi);
-        const auto gdy = G.template eval<iganet::deriv::dy>(xi);
-        const auto udx = U.template eval<iganet::deriv::dx>(xi);
-        const auto udy = U.template eval<iganet::deriv::dy>(xi);
-        const auto J = stackParametricJacobian(gdx, gdy);
-        const auto invJ = torch::linalg_inv(J);
-        const auto gradUxi = stackParametricJacobian(udx, udy);
+        auto U = localPatchWithTensor(displacement(), patchIndex, displacementTensor);
+        const auto gradUxi = evaluate_parametric_gradient(U, cache);
         const auto grad = torch::matmul(gradUxi, invJ);
         const auto ux_x = grad.index({torch::indexing::Slice(), 0, 0});
         const auto ux_y = grad.index({torch::indexing::Slice(), 0, 1});
@@ -674,7 +905,12 @@ private:
     iganet::StrongDirichletConstraints<real_t> constraints_;
     ParametricConfig cfg_;
     torch::TensorOptions options_;
+    CollocationData collocationData_;
     std::vector<double> history_;
+    std::vector<PatchResidualCache> patchResidualCaches_;
+    std::vector<BoundaryTractionCache> tractionCaches_;
+    std::vector<InterfaceCache> interfaceCaches_;
+    double preparationSeconds_{0.0};
     double lambda_{0.0};
     double mu_{0.0};
 };
@@ -733,9 +969,6 @@ nlohmann::json patchesToJson(const multipatch_t& geometry,
 } // namespace
 
 int main() {
-    ::setenv("IGANET_DEVICE", "CPU", 1);
-    ::setenv("IGANET_DEVICE_INDEX", "0", 1);
-
     iganet::init();
     iganet::verbose(std::cout);
 
@@ -760,11 +993,10 @@ int main() {
         cfgFile >> j;
     }
 
-    const auto computeDevice = torch::Device(torch::kCPU);
-    const auto options = iganet::Options<real_t>{}.device(computeDevice);
-
     try {
         auto cfg = loadConfig(j);
+        const auto computeDevice = resolveComputeDevice(j);
+        const auto options = iganet::Options<real_t>{}.device(computeDevice);
         const auto mode = parseGeometryMode(j);
         multipatch_t geometry;
         std::optional<std::filesystem::path> xmlPath;
@@ -774,6 +1006,7 @@ int main() {
         } else {
             geometry = makeTwoSquareGeometry(cfg, options);
         }
+        moveMultipatchToDevice(geometry, computeDevice);
         resolvePatchConfigs(geometry, cfg);
         auto displacement = geometry.make_isoparametric_solution_space<2>(options);
 
@@ -816,16 +1049,19 @@ int main() {
             auto displacementTensor = displacementOut.as_tensor().detach();
             auto geometryTensor = geometryOut.as_tensor();
             auto history = net.history();
+            auto preparationSeconds = net.preparation_seconds();
 
             return std::tuple{
                 std::move(geometryOut),
                 std::move(displacementOut),
                 std::move(displacementTensor),
                 std::move(geometryTensor),
-                std::move(history)};
+                std::move(history),
+                preparationSeconds};
         };
 
-        auto [geometryOut, displacementOut, displacementTensor, geometryTensor, history] =
+        auto [geometryOut, displacementOut, displacementTensor, geometryTensor, history,
+              preparationSeconds] =
             (cfg.optimizer.type == optimizer_type_t::adam)
                 ? run.template operator()<torch::optim::Adam>()
                 : run.template operator()<torch::optim::LBFGS>();
@@ -833,6 +1069,7 @@ int main() {
         nlohmann::json summary;
         summary["example"] = "two_parametric_squares";
         summary["geometry_mode"] = (mode == GeometryMode::Xml ? "xml" : "parametric");
+        summary["device"] = computeDevice.str();
         if (xmlPath.has_value()) {
             summary["xml_path"] = xmlPath->string();
         }
@@ -843,6 +1080,7 @@ int main() {
         summary["displacement_scalar_dofs"] = displacementOut.ndofs();
         summary["strong_dirichlet_fixed_dofs"] = constraints.nfixed();
         summary["strong_dirichlet_free_dofs"] = constraints.nfree();
+        summary["preparation_seconds"] = preparationSeconds;
         summary["loss_initial"] = history.empty() ? 0.0 : history.front();
         summary["loss_final"] = history.empty() ? 0.0 : history.back();
         summary["loss_history"] = history;
@@ -859,11 +1097,13 @@ int main() {
 
         std::cout << "\n=== PARAMETRIC TWO-SQUARE MULTIPATCH 2D ===\n"
                   << "config: " << configPath << "\n"
+                  << "device: " << computeDevice.str() << "\n"
                   << "patches: " << geometryOut.npatches() << "\n"
                   << "interfaces: " << geometryOut.ninterfaces() << "\n"
                   << "scalar dofs: " << geometryOut.ndofs() << "\n"
                   << "fixed dofs: " << constraints.nfixed() << "\n"
                   << "free dofs: " << constraints.nfree() << "\n"
+                  << "preparation [s]: " << preparationSeconds << "\n"
                   << "loss initial: " << summary["loss_initial"] << "\n"
                   << "loss final: " << summary["loss_final"] << "\n"
                   << "result: " << resultPath << "\n"
