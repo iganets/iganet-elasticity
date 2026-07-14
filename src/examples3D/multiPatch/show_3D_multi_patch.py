@@ -27,9 +27,29 @@ def find_repo_root(start: Path) -> Path:
 
 REPO_ROOT = find_repo_root(SCRIPT_DIR)
 DEFAULT_RESULT_PATH = REPO_ROOT / "results" / "result_iganet_lin_elasticity_3D_multipatch_parametrized.json"
+XML_RESULT_PATH = REPO_ROOT / "results" / "result_iganet_lin_elasticity_3D_multipatch.json"
 DEFAULT_OUTPUT_PATH = REPO_ROOT / "results" / "iganet_lin_elasticity_3D_multipatch_parametrized.png"
 
 # Helper functions keep the main plotting routine compact.
+def derive_output_path(result_path: Path) -> Path:
+    stem = result_path.stem
+    if stem.startswith("result_"):
+        stem = stem[len("result_"):]
+    return REPO_ROOT / "results" / f"{stem}.png"
+
+
+def resolve_result_paths(result_arg):
+    if result_arg is not None:
+        return [Path(result_arg)]
+
+    candidates = [DEFAULT_RESULT_PATH, XML_RESULT_PATH]
+    existing = [candidate for candidate in candidates if candidate.exists()]
+    if existing:
+        return existing
+
+    return [DEFAULT_RESULT_PATH]
+
+
 def load_result(path: Path):
     with path.open() as file:
         data = json.load(file)
@@ -61,28 +81,8 @@ def style_patches(patches):
         patch.show_options["control_point_ids"] = False
 
 
-def main():
-    # Read the stored patch data, rebuild spline objects, and render them.
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "result",
-        nargs="?",
-        default=str(DEFAULT_RESULT_PATH),
-        help="Path to the 3D multipatch result json",
-    )
-    parser.add_argument(
-        "--deformed-only",
-        action="store_true",
-        help="Show only the deformed multipatch",
-    )
-    parser.add_argument(
-        "--output",
-        default=str(DEFAULT_OUTPUT_PATH),
-        help="Path to the output PNG file",
-    )
-    args = parser.parse_args()
-
-    result = load_result(Path(args.result))
+def render_result(result_path: Path, output_path: Path, deformed_only: bool):
+    result = load_result(result_path)
     patches = result["patches"]
 
     reference = [make_patch(patch_data, deformed=False) for patch_data in patches]
@@ -91,10 +91,9 @@ def main():
     style_patches(reference)
     style_patches(deformed)
 
-    output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if args.deformed_only:
+    if deformed_only:
         splinepy.show(
             [*deformed],
             offscreen=True,
@@ -118,10 +117,11 @@ def main():
         else:
             raise AttributeError("vedo.screenshot not available")
     except Exception as exc:
-        print(f"Could not save screenshot with vedo: {exc}")
+        print(f"Could not save screenshot with vedo for {result_path}: {exc}")
         raise
 
-    if args.deformed_only:
+    print(f"Showing {result_path}")
+    if deformed_only:
         splinepy.show(
             [*deformed],
             control_mesh=False,
@@ -135,6 +135,36 @@ def main():
         control_mesh=False,
         control_point_ids=False,
     )
+
+
+def main():
+    # Read one or more stored patch sets, rebuild spline objects, and render them.
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "result",
+        nargs="?",
+        default=None,
+        help="Optional path to a specific 3D multipatch result json",
+    )
+    parser.add_argument(
+        "--deformed-only",
+        action="store_true",
+        help="Show only the deformed multipatch",
+    )
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Optional path to the output PNG file (only used when one result file is shown)",
+    )
+    args = parser.parse_args()
+
+    result_paths = resolve_result_paths(args.result)
+    if not result_paths:
+        raise FileNotFoundError("Could not find any matching 3D multipatch result json files.")
+
+    for result_path in result_paths:
+        output_path = Path(args.output) if args.output is not None else derive_output_path(result_path)
+        render_result(Path(result_path), output_path, args.deformed_only)
 
 
 if __name__ == "__main__":
