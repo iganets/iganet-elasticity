@@ -165,6 +165,20 @@ def main():
         print(f"Could not save screenshot with vedo: {exc}")
         raise
 
+    if args.deformed_only:
+        splinepy.show(
+            ["deformed", *deformed, *overlays],
+            control_mesh=False,
+            control_point_ids=False,
+        )
+    else:
+        splinepy.show(
+            ["reference", *reference, *overlays],
+            ["deformed", *deformed, *overlays],
+            control_mesh=False,
+            control_point_ids=False,
+        )
+
 
 if __name__ == "__main__":
     main()

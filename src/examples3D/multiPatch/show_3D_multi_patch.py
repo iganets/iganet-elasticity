@@ -8,7 +8,6 @@ import argparse
 import json
 from pathlib import Path
 
-import gustaf as gus
 import splinepy
 
 
@@ -123,10 +122,14 @@ def main():
         raise
 
     if args.deformed_only:
-        gus.show([*deformed], control_mesh=False, control_point_ids=False)
+        splinepy.show(
+            [*deformed],
+            control_mesh=False,
+            control_point_ids=False,
+        )
         return
 
-    gus.show(
+    splinepy.show(
         [*reference],
         [*deformed],
         control_mesh=False,
