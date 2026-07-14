@@ -14,7 +14,20 @@ import splinepy
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parents[3]
+
+
+def find_repo_root(start: Path) -> Path:
+    for current in [start, *start.parents]:
+        if (
+            (current / "CMakeLists.txt").exists()
+            and (current / "src").exists()
+            and (current / "results").exists()
+        ):
+            return current
+    raise RuntimeError(f"Could not locate repository root from script path: {start}")
+
+
+REPO_ROOT = find_repo_root(SCRIPT_DIR)
 DEFAULT_RESULT_PATH = REPO_ROOT / "results" / "result_iganet_lin_elasticity_2D.json"
 DEFAULT_OUTPUT_PATH = REPO_ROOT / "results" / "iganet_lin_elasticity_2D.png"
 
