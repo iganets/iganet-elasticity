@@ -326,18 +326,6 @@ int main() {
         return 1;
     }
 
-    const std::string cmd =
-        "cd \"" + repoRoot.string() +
-        "\" && python3 -m std_collocation_python.run_std_coll src/examples2D/singlePatch/sim_config_2D_single_patch.json";
-    // The Python reference run writes a standard-collocation baseline into the
-    // result JSON. The optimized example still solves the IgANet problem, but
-    // the baseline is useful for comparison and visualization.
-    const int ret = std::system(cmd.c_str());
-    if (ret != 0) {
-        std::cerr << "ERROR: python reference run failed. system() returned " << ret << "\n";
-        return 1;
-    }
-
     double youngModulus = 0.0;
     double poissonRatio = 0.0;
     int maxEpoch = 0;
@@ -346,6 +334,7 @@ int main() {
     int64_t nrCtrlPts = 0;
     int degreeCfg = 0;
     optimizer_config_t optimizerCfg;
+    bool runCollRefSim = false;
 
     std::vector<std::tuple<int, double, double>> forceSides;
     std::vector<std::tuple<int, double, double>> diriSides;
@@ -377,9 +366,27 @@ int main() {
         }
         tfbcSides = patchCfg.tfbc_sides;
         bodyForce = {patchCfg.body_force[0], patchCfg.body_force[1]};
+
+        if (j.contains("reference_simulation")) {
+            runCollRefSim = require(j, "reference_simulation.run_coll_ref_sim").get<bool>();
+        }
     } catch (const std::exception& e) {
         std::cerr << "Config error: " << e.what() << "\n";
         return 1;
+    }
+
+    if (runCollRefSim) {
+        const std::string cmd =
+            "cd \"" + repoRoot.string() +
+            "\" && python3 -m std_collocation_python.run_std_coll \"" +
+            CONFIG_PATH.string() + "\" \"" + RESULT_PATH.string() + "\"";
+        // The Python reference run writes a standard-collocation baseline into
+        // the same result JSON as the IgANet solve.
+        const int ret = std::system(cmd.c_str());
+        if (ret != 0) {
+            std::cerr << "ERROR: python reference run failed. system() returned " << ret << "\n";
+            return 1;
+        }
     }
 
     if (optimizerCfg.type != optimizer_type_t::lbfgs) {

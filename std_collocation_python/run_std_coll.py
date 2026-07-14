@@ -351,8 +351,10 @@ def run_3d(cfg: dict, out_path: str) -> None:
 
 
 def main():
-    if len(sys.argv) != 2:
-        raise SystemExit("Usage: python3 std_collocation_python/run_std_coll.py <config_path>")
+    if len(sys.argv) not in (2, 3):
+        raise SystemExit(
+            "Usage: python3 std_collocation_python/run_std_coll.py <config_path> [output_json_path]"
+        )
 
     config_arg = sys.argv[1]
     config_path = Path(config_arg)
@@ -361,8 +363,11 @@ def main():
 
     cfg = load_json_with_line_comments(str(config_path))
 
-    out_path_cfg = get_optional(cfg, "simulation.json_path", "results/result.json")
-    out_path = resolve_out_path(out_path_cfg)
+    if len(sys.argv) == 3:
+        out_path = resolve_out_path(sys.argv[2])
+    else:
+        out_path_cfg = get_optional(cfg, "simulation.json_path", "results/result.json")
+        out_path = resolve_out_path(out_path_cfg)
 
     dim = detect_dimension(cfg)
     if dim == 2:
