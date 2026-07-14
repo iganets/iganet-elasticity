@@ -1,3 +1,12 @@
+/*
+ * Example: 3D multi-patch elasticity from an XML spline geometry.
+ *
+ * This example focuses on loading an existing spline geometry, constructing a
+ * multi-patch description from it, and then running a collocation-based
+ * elasticity solve across all patches. It is a useful smoke/integration case
+ * for complex geometries such as the bone example.
+ */
+
 #include "headers/lin_elasticity_utils.hpp"
 
 #include <iganet.h>
@@ -22,6 +31,10 @@ using iganet_elasticity::utils::config::require;
 using iganet_elasticity::utils::paths::repo_root_from_build_exe;
 
 namespace {
+
+// -----------------------------------------------------------------------------
+// Helper functions for reading example-specific geometry settings
+// -----------------------------------------------------------------------------
 
 std::filesystem::path resolveXmlPath(int argc, char** argv,
                                      const std::filesystem::path& repoRoot,

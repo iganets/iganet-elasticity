@@ -1,4 +1,12 @@
 {
+  "_documentation": {
+    "purpose": "Configuration for the 3D multi-patch elasticity examples.",
+    "notes": [
+      "geometry typically points to a multi-patch XML file together with the chosen multipatch_id.",
+      "geometry_spline and solution_spline control the patch-local spline spaces.",
+      "multipatch_3D lists loads and boundary conditions patch by patch."
+    ]
+  },
   "simulation": {
     "max_epoch": 5,
     "min_loss": 1e-06,

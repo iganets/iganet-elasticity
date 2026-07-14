@@ -1,3 +1,9 @@
+"""Visualize the 3D multi-patch elasticity result with splinepy.
+
+This is the simplest of the show scripts: it rebuilds the reference and
+deformed patch set from the JSON file and renders them side by side.
+"""
+
 import argparse
 import json
 from pathlib import Path
@@ -11,7 +17,7 @@ REPO_ROOT = SCRIPT_DIR.parents[3]
 DEFAULT_RESULT_PATH = REPO_ROOT / "results" / "result_iganet_lin_elasticity_3D_multipatch_parametrized.json"
 DEFAULT_OUTPUT_PATH = REPO_ROOT / "results" / "iganet_lin_elasticity_3D_multipatch_parametrized.png"
 
-
+# Helper functions keep the main plotting routine compact.
 def load_result(path: Path):
     with path.open() as file:
         data = json.load(file)
@@ -19,6 +25,7 @@ def load_result(path: Path):
 
 
 def make_patch(patch_data, deformed=False):
+    # Each patch already carries all spline data needed for reconstruction.
     control_points = (
         patch_data["deformed_control_points"]
         if deformed
@@ -32,6 +39,8 @@ def make_patch(patch_data, deformed=False):
 
 
 def style_patches(patches):
+    # For 3D screenshots the surface itself is usually the important signal,
+    # not the underlying control mesh. We therefore hide those extras here.
     for patch in patches:
         if not hasattr(patch, "show_options"):
             continue
@@ -41,6 +50,7 @@ def style_patches(patches):
 
 
 def main():
+    # Read the stored patch data, rebuild spline objects, and render them.
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "result",

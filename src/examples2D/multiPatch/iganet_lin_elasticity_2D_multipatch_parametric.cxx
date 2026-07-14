@@ -1,3 +1,12 @@
+/*
+ * Example: 2D multi-patch linear elasticity.
+ *
+ * This example demonstrates how the core multi-patch data structures are used
+ * in a collocation setting. The geometry and solution space are assembled from
+ * multiple spline patches, interface information is enforced explicitly, and
+ * the result JSON stores both field data and collocation-point diagnostics.
+ */
+
 #include "headers/lin_elasticity_utils.hpp"
 
 #include <iganet.h>
@@ -26,6 +35,10 @@ using patch_config_2d_t = iganet_elasticity::utils::config::patch_config_2d;
 
 namespace {
 
+// -----------------------------------------------------------------------------
+// Example-local type aliases and configuration container
+// -----------------------------------------------------------------------------
+
 using real_t = double;
 using patch_t = iganet::DynamicBSplinePatch<real_t, 2, 2>;
 using multipatch_t = iganet::MultiPatch<patch_t>;
@@ -45,6 +58,7 @@ struct ParametricConfig {
 
 enum class ComputeDeviceMode { Auto, CPU, CUDA };
 
+// Gather the example settings from the shared JSON configuration.
 ParametricConfig loadConfig(const nlohmann::json& j) {
     ParametricConfig cfg;
 
@@ -465,6 +479,8 @@ public:
     }
 
     bool epoch(int64_t epochIndex) override {
+        // By the time epoch() is called, all patch-wise caches are already
+        // prepared. The callback is mostly used for readable progress output.
         std::cout << "\nEpoch " << epochIndex << "\n";
         return true;
     }
@@ -478,7 +494,11 @@ public:
     }
 
     torch::Tensor loss(const torch::Tensor& outputs, int64_t) override {
+        // Strong Dirichlet constraints are applied directly to the coefficient
+        // vector before any PDE or boundary term is evaluated.
         const auto displacementTensor = constraints_.apply(outputs);
+        // loss_parts() computes the full split of the multi-patch objective:
+        // collocation/PDE, external traction terms, and interface traction.
         const auto parts = loss_parts(displacementTensor);
         history_.push_back(parts.total.detach().template item<double>());
         std::cout << "  loss"
@@ -984,6 +1004,8 @@ nlohmann::json patchesToJson(const multipatch_t& geometry,
 } // namespace
 
 int main() {
+    // As in the optimized single-patch examples, main() is kept mostly
+    // sequential: read config, build geometry, create network, train, export.
     iganet::init();
     iganet::verbose(std::cout);
 

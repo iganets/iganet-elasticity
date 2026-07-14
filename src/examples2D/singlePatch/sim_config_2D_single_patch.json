@@ -1,4 +1,12 @@
 {
+  "_documentation": {
+    "purpose": "Configuration for the 2D single-patch elasticity example.",
+    "notes": [
+      "solution_spline defines the displacement spline that IgANet optimizes.",
+      "single_patch_2D contains body force and boundary conditions for the physical problem.",
+      "reference_simulation controls optional comparison runs such as G+Smo or standard collocation."
+    ]
+  },
   "optimizer": {
     "type": "lbfgs"
   },

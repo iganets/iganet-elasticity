@@ -1,3 +1,10 @@
+"""Visualize the final result of the 2D single-patch example.
+
+The script reads the JSON output written by the solver, rebuilds a splinepy
+representation of the deformed IgANet geometry, and places it next to the
+reference collocation solution when available.
+"""
+
 import json
 import argparse
 from pathlib import Path
@@ -11,7 +18,7 @@ REPO_ROOT = SCRIPT_DIR.parents[3]
 DEFAULT_RESULT_PATH = REPO_ROOT / "results" / "result_iganet_lin_elasticity_2D.json"
 DEFAULT_OUTPUT_PATH = REPO_ROOT / "results" / "iganet_lin_elasticity_2D.png"
 
-
+# Small helpers below keep the main plotting flow compact and readable.
 def load_result(path):
     with open(path, "r") as file:
         return json.load(file)
@@ -98,6 +105,10 @@ def make_reference_object(data, degree):
 
 
 def main():
+    # The plotting workflow is:
+    #   1. read the result JSON,
+    #   2. rebuild splinepy objects,
+    #   3. show and save the reference/deformed comparison.
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "result",

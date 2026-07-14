@@ -1,3 +1,10 @@
+"""Visualize the final result of the 3D single-patch example.
+
+The script mirrors the 2D single-patch visualizer, but reconstructs a 3D
+spline object from the stored control points and renders the deformed result
+next to the reference geometry when available.
+"""
+
 import json
 import argparse
 from pathlib import Path
@@ -11,7 +18,7 @@ REPO_ROOT = SCRIPT_DIR.parents[3]
 DEFAULT_RESULT_PATH = REPO_ROOT / "results" / "result_iganet_lin_elasticity_3D.json"
 DEFAULT_OUTPUT_PATH = REPO_ROOT / "results" / "iganet_lin_elasticity_3D.png"
 
-
+# These helpers convert JSON arrays back into splinepy-friendly spline data.
 def load_result(path):
     with open(path, "r") as file:
         return json.load(file)
@@ -98,6 +105,7 @@ def make_reference_object(data, degree):
 
 
 def main():
+    # Read the result file, rebuild spline objects, then render/save them.
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "result",

@@ -1,4 +1,12 @@
 {
+  "_documentation": {
+    "purpose": "Configuration for the 2D multi-patch elasticity example.",
+    "notes": [
+      "geometry selects whether the geometry is loaded from XML or built parametrically.",
+      "geometry_spline and solution_spline are currently expected to match for the isoparametric setup.",
+      "Each patch entry defines local loads and boundary conditions for one patch in the multi-patch domain."
+    ]
+  },
   "optimizer": {
     "type": "lbfgs"
   },
