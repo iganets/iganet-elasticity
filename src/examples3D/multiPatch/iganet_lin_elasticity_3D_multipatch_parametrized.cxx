@@ -1,3 +1,12 @@
+/*
+ * Example: 3D multi-patch elasticity with a parametric test geometry.
+ *
+ * Unlike the XML-based 3D multi-patch example, this file builds the spline
+ * geometry procedurally. This is useful when debugging patch interfaces and
+ * boundary conditions because the geometry is simple and fully controlled by
+ * the code and the configuration file.
+ */
+
 #include "headers/lin_elasticity_utils.hpp"
 #include "headers/lin_elasticity_multipatch_net.hpp"
 
@@ -25,6 +34,10 @@ using patch_config_3d_t = iganet_elasticity::utils::config::patch_config_3d;
 
 namespace {
 
+// -----------------------------------------------------------------------------
+// Example-local aliases and configuration helpers
+// -----------------------------------------------------------------------------
+
 using real_t = double;
 using patch_t = iganet::DynamicBSplinePatch<real_t, 3, 3>;
 using multipatch_t = iganet::MultiPatch<patch_t>;
@@ -35,6 +48,8 @@ using boundary_value_t = typename config_t::boundary_value_t;
 enum class ComputeDeviceMode { Auto, CPU, CUDA };
 
 std::vector<boundary_value_t> readBoundaryValues(const nlohmann::json& values) {
+    // Convert the compact JSON encoding [side, vx, vy, vz] to the strongly
+    // typed representation used by the network configuration.
     std::vector<boundary_value_t> result;
     for (const auto& value : values) {
         result.emplace_back(value.at(0).get<int>(),
@@ -47,6 +62,8 @@ std::vector<boundary_value_t> readBoundaryValues(const nlohmann::json& values) {
 
 std::filesystem::path resolveXmlPath(const std::filesystem::path& repoRoot,
                                      const nlohmann::json& j) {
+    // XML mode reuses a spline geometry defined elsewhere. Relative paths are
+    // interpreted relative to the repository root for convenience.
     if (!j.contains("geometry")) {
         throw std::runtime_error("geometry section missing for xml mode");
     }
@@ -93,6 +110,8 @@ ComputeDeviceMode parseComputeDeviceMode(const nlohmann::json& j) {
 }
 
 torch::Device resolveComputeDevice(const nlohmann::json& j) {
+    // This helper centralizes the CPU/CUDA selection logic so the rest of the
+    // example can work directly with a concrete torch::Device.
     switch (parseComputeDeviceMode(j)) {
         case ComputeDeviceMode::CPU:
             return torch::Device(torch::kCPU);

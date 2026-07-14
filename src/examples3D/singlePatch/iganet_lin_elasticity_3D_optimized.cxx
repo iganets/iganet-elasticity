@@ -1,3 +1,11 @@
+/*
+ * Example: optimized 3D single-patch linear elasticity.
+ *
+ * This file mirrors the structure of the optimized 2D example:
+ *   - keep the example control flow here,
+ *   - delegate the PDE-specific implementation details to the shared header,
+ *   - support both parametric and XML-based geometry setup.
+ */
 
 #include "headers/lin_elasticity_net.hpp"
 
@@ -17,6 +25,7 @@ using namespace iganet::literals;
 using iganet_elasticity::utils::paths::repo_root_from_build_exe;
 using iganet_elasticity::utils::config::require;
 
+// run() executes one degree-specialized simulation instance.
 template <int DEGREE, typename GeometrySpline, typename VariableSpline,
           typename GeometrySpaceSpec, typename VariableSpaceSpec>
 int run(
@@ -44,6 +53,7 @@ int run(
     VariableSpaceSpec&&                                 variableSpaceSpec,
     const XmlGeometryData*                              xmlDataPtr = nullptr)
 {
+    // The degree is compile-time because the spline type is compile-time.
     using real_t      = double;
     using optimizer_t = torch::optim::LBFGS;
     using geometry_t  = iganet::S<GeometrySpline>;
@@ -67,10 +77,13 @@ int run(
         iganet::init::greville,
         iganet::IgANetOptions{},
         netOptions);
+    // The shared linear_elasticity header performs the actual mechanics,
+    // collocation handling, and training. This file mainly prepares geometry,
+    // space types, and result export.
 
     if (geoMode == GeometryMode::Xml) {
 
-        // Load control points and knot vectors from XML
+        // XML mode imports the geometry map from the spline file.
         if (!xmlDataPtr) {
             std::cerr << "Error: XML geometry requested without loaded XML data.\n";
             return 1;
@@ -78,6 +91,8 @@ int run(
         net.template input<0>().from_xml(xmlDataPtr->doc, 0);
 
     } else {
+        // Parametric mode creates a box-like spline geometry directly from
+        // Greville points. This is convenient for controlled test problems.
 
         std::array<double,3> origin = {0.0, 0.0, 0.0};
         std::array<double,3> scale  = {1.0, 1.0, 1.0};
@@ -98,6 +113,8 @@ int run(
         const auto greville   = computeGrevilleAbscissae(knotVector, DEGREE, static_cast<int>(nrCtrlPts));
         const int64_t nPts    = nrCtrlPts * nrCtrlPts * nrCtrlPts;
 
+        // Internal spline tensors use component-major storage:
+        // [all x coordinates | all y coordinates | all z coordinates].
         auto geomTensor = torch::zeros({3 * nPts}, net.template input<0>().as_tensor().options());
 
         int64_t idx = 0;
@@ -117,6 +134,7 @@ int run(
 
   
     auto setComponent = [&](auto& boundary, double value, iganet::short_t comp) {
+        // Assign one scalar component on one reference boundary side.
         boundary.template transform<1>(
             [value](const std::array<real_t,2>&) -> std::array<real_t,1> {
                 return {value};
@@ -125,6 +143,8 @@ int run(
     };
 
     for (const auto& side : diriSides) {
+        // The reference field stores the prescribed boundary displacement and
+        // is later used by the shared loss implementation.
         const int    sNr   = std::get<0>(side);
         const double xDisp = std::get<1>(side);
         const double yDisp = std::get<2>(side);
@@ -168,6 +188,8 @@ int run(
 
     net.options().max_epoch(maxEpoch);
     net.options().min_loss(minLoss);
+    // In the 3D shared header, all collocation-point caches are prepared
+    // explicitly before the training loop starts.
     net.initialize_problem_data();
 
     auto t1 = std::chrono::high_resolution_clock::now();
@@ -180,6 +202,9 @@ int run(
 
  
     net.PostProc();
+    // PostProc() writes stresses, residuals, and displaced collocation points.
+    // We additionally export deformed control points below because the final
+    // geometry viewer reconstructs the spline from them.
 
     torch::Tensor geomTensor = net.template input<0>().as_tensor();
     torch::Tensor dispTensor = net.template output<0>().as_tensor();
@@ -198,6 +223,7 @@ int run(
 
     torch::Tensor netCtrlPts = torch::zeros({nCtrlPtsXml, 3}, geomTensor.options());
     torch::Tensor netDisplacements = torch::zeros({nCtrlPtsXml, 3}, geomTensor.options());
+    // Convert flat component-major tensors back into one row per control point.
     for (int64_t i = 0; i < nCtrlPtsXml; ++i) {
         netDisplacements[i][0] = dispTensor[i].item<double>();
         netDisplacements[i][1] = dispTensor[i + nCtrlPtsXml].item<double>();
@@ -225,6 +251,9 @@ int run(
     net.appendToJsonFile("net_Degree",           DEGREE);
 
     // Optional: GISMO reference simulation
+    //
+    // This branch is only a comparison/debugging aid. The IgANet solve itself
+    // does not depend on it.
 
 #ifdef IGANET_WITH_GISMO
     if (runGsRefSim) {
@@ -262,6 +291,8 @@ int run(
 }
 
 int main() {
+    // Keep the high-level flow easy to follow: configuration, geometry mode,
+    // degree dispatch, training, export.
     iganet::init();
     iganet::verbose(std::cout);
 
@@ -293,6 +324,8 @@ int main() {
 
     const std::string cmd =
         "cd \"" + repoRoot.string() + "\" && python3 -m std_collocation_python.run_std_coll src/examples3D/singlePatch/sim_config_3D_single_patch.json";
+    // As in 2D, the external Python run creates a standard-collocation
+    // baseline that is stored alongside the IgANet result.
     const int ret = std::system(cmd.c_str());
     if (ret != 0) {
         std::cerr << "ERROR: python reference run failed. system() returned "

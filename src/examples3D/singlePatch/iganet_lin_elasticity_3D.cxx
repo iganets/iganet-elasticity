@@ -1,3 +1,12 @@
+/*
+ * Example: 3D single-patch linear elasticity with collocation-based IgANet.
+ *
+ * This is the more explicit 3D reference example. It keeps most of the
+ * mechanics, collocation handling, traction evaluation, and post-processing
+ * directly in the file. That makes it longer, but also easier to inspect when
+ * one wants to understand the full 3D workflow in one place.
+ */
+
 #include <iganet.h>
 #include <iostream>
 #include <fstream>
@@ -7,6 +16,10 @@
 using namespace iganet::literals;
 using iganet_elasticity::utils::paths::repo_root_from_build_exe;
 using iganet_elasticity::utils::config::require;
+
+// -----------------------------------------------------------------------------
+// Network wrapper used by this example
+// -----------------------------------------------------------------------------
 
 /// @brief Specialization of the IgANet class for linear elasticity in 3D 
 template <typename Optimizer, typename GeometryMap, typename Variable>
@@ -495,6 +508,9 @@ public:
         std::cout << "Epoch: " << epoch << std::endl;   
 
         if (epoch == 0) {
+            // The first epoch is used to build all fixed collocation data and
+            // to precompute knot/coefficient lookup tables for fast spline
+            // derivative evaluation during training.
             Base::inputs(epoch);
             collPts_         = Base::template collPts<0>(iganet::collPts::greville);
             interiorCollPts_ = Base::template collPts<0>(iganet::collPts::greville_interior);
@@ -550,7 +566,8 @@ public:
     /// @brief Computes the loss function
     torch::Tensor loss(const torch::Tensor &outputs, int64_t epoch) override {
 
-        // create u_ from the training's outputs
+        // Interpret the raw network output as the coefficient vector of the
+        // displacement spline u. All following evaluations act on that spline.
         this->template output<0>().from_tensor(outputs);
 
         // pre-allocation of the loss values
@@ -568,7 +585,11 @@ public:
         std::optional<torch::Tensor> tractionZeros;
 
 
-//-------- TRACTION / NEUMANN BOUNDARY CONDITIONS FOR 3D CUBE ----------------------------------------------
+        // -----------------------------------------------------------------
+        // Boundary contribution in 3D:
+        // evaluate sigma(u) * n on cube faces for traction-free and
+        // prescribed-force conditions.
+        // -----------------------------------------------------------------
         if (!TFBC_SIDES_.empty() || !FORCE_SIDES_.empty())
         {
             // collect sides of traction-free and force BCs
@@ -769,6 +790,8 @@ public:
                     sideCtr++;
                 }
 
+                // After all side-local contributions are written, we combine
+                // them into one (N,3) tensor for the traction loss terms.
                 torch::Tensor tractionValues =
                     torch::stack({tractionValuesX, tractionValuesY, tractionValuesZ}, 1);
 
@@ -782,6 +805,9 @@ public:
                         cutlength += nPtsPerSide[i];
                     }
 
+                    // When both traction-free and prescribed-force boundaries
+                    // are present, the concatenated tensor is split into the
+                    // zero-traction part and the prescribed-traction part.
                     tractionFreeValues.emplace(
                         tractionValues.slice(0, 0, tractionValues.size(0) - cutlength));
                     tractionZeros.emplace(torch::zeros_like(*tractionFreeValues));
@@ -813,14 +839,21 @@ public:
             }
         }
 
-//----------- LINEAR ELASTICITY EQUATION------------------------------------------------------------------------
+        // -----------------------------------------------------------------
+        // Interior PDE contribution:
+        // compute div(sigma(u)) in 3D linear elasticity.
+        // -----------------------------------------------------------------
 
-        // calculation of the second derivatives of the displacements (u)
+        // Compute all second spatial derivatives of the displacement field.
+        // In 3D the operator needs many mixed derivatives, so we keep the
+        // notation explicit rather than trying to hide it.
         auto hessianColl = this->template output<0>().ihess(this->template input<0>(), interiorCollPts_.interior(), 
             var_knot_indices_interior_, var_coeff_indices_interior_,
             G_knot_indices_interior_, G_coeff_indices_interior_);
 
-        // partial derivatives of the displacements (u)
+        // The naming pattern is:
+        //   ux_xx = d²u_x / dx²,  uy_yz = d²u_y / dydz,  ...
+        // This looks verbose, but it makes the PDE formulas below explicit.
         auto& ux_xx = hessianColl(0,0,0);
         auto& ux_xy = hessianColl(0,1,0);
         auto& ux_xz = hessianColl(0,2,0);
@@ -862,6 +895,8 @@ public:
 
         torch::Tensor divZeros = torch::stack({divStressX, divStressY, divStressZ}, /*dim=*/1);
         
+        // Assemble the three components of div(sigma(u)) for isotropic
+        // linear elasticity in 3D.
         for (int i = 0; i < size; ++i) {
             divStressX[i] =
                 (lambda_ + 2.0 * mu_) * ux_xx[i]
@@ -909,10 +944,19 @@ public:
         // BODY FORCE: constant vector (fx, fy)
         //auto opts = divStress.options();  // device + dtype passend zu divStress -> bereits davor definiert
 
+        // Replicate the constant body-force vector to all interior points.
         torch::Tensor bodyForce = torch::tensor(
             {BODY_FORCE_[0], BODY_FORCE_[1], BODY_FORCE_[2]},
             opts
         ).view({1, 3}).repeat({divStress.size(0), 1});   // (N,3)
+
+        // -----------------------------------------------------------------
+        // Loss assembly
+        //
+        // The total loss is a sum of PDE residual, optional traction terms,
+        // optional Dirichlet penalties, and optionally a supervised reference
+        // term when a standard collocation solution is available.
+        // -----------------------------------------------------------------
 
         // UNSUPERVISED LEARNING (default)
         if (SUPERVISED_LEARNING_ == false) {
@@ -930,14 +974,14 @@ public:
             // add the elasticity loss to the cmd-output variable
             singleLossOutput << "EL " << std::setw(11) << elastLoss.item<double>();
 
-            // only consider traction-free-bc (tfbc) loss if tfbcs are applied
+            // Zero-traction faces enforce sigma*n = 0.
             if (!TFBC_SIDES_.empty()) {
                 tfbcLoss = torch::mse_loss(*tractionFreeValues, *tractionZeros);
                 totalLoss += *tfbcLoss;
                 singleLossOutput << " + TL " << std::setw(11) << (*tfbcLoss).item<double>();
             }
 
-            // only consider force loss if force is applied
+            // Force faces enforce sigma*n = t_prescribed.
             if (!FORCE_SIDES_.empty()) {
                 forceLoss = torch::mse_loss(*forceValues, *targetForce);
                 totalLoss += *forceLoss;
@@ -956,6 +1000,9 @@ public:
                 // evaluation of the displacements at the reference boundary points
                 auto bdr = ref_.template eval<iganet::functionspace::boundary>(collPts_.boundary());
 
+                // Corners and edges belong to multiple faces. The helper below
+                // removes points that are owned by a higher-priority boundary
+                // condition so that boundary penalties are not double-counted.
                 auto masked_side_loss = [&](const torch::Tensor& u0,
                             const torch::Tensor& u1,
                             const torch::Tensor& u2,
@@ -1028,7 +1075,8 @@ public:
             // create command line output variable for all the different losses
             std::ostringstream singleLossOutput;
         
-            // preprocess the outputs for comparison with the std collocation solution
+            // Reshape the flat output vector into one 3D displacement vector
+            // per control point before comparing it to the reference data.
             torch::Tensor modifiedOutputs = outputs * 1.0;
         
             // create netDisplacements_ from slices of modifiedOutputs
@@ -1153,14 +1201,19 @@ public:
             throw std::runtime_error("Invalid value for SUPERVISED_LEARNING_");
         }
 
-        // POSTPROCESSING PREPARATION - WRITING DATA TO JSON FILE
+        // -----------------------------------------------------------------
+        // Final export of stress, deformation, and residual diagnostics
+        // -----------------------------------------------------------------
 
         // only calculate this at the end of the simulation
         if ((epoch == MAX_EPOCH_ - 1) || (totalLoss.item<double>() <= MIN_LOSS_)) {
             
-            // STRESS CALCULATION
+            // -------------------------
+            // Stress output on all collocation points
+            // -------------------------
 
-            // calculate the jacobian of the displacements (u) at the collocation points
+            // Post-processing uses first physical derivatives at all
+            // collocation points to compute Cauchy stresses.
             auto jacobian = this->template output<0>().ijac(this->template input<0>(), collPts_.interior(), var_knot_indices_, 
                 var_coeff_indices_, G_knot_indices_, G_coeff_indices_);
             
@@ -1195,7 +1248,8 @@ public:
             nlohmann::json netZStresses_j = nlohmann::json::array();
             nlohmann::json netPoisson_j = nlohmann::json::array();
 
-            // calculate the stress tensor
+            // Compute all stress components explicitly so the JSON output can
+            // later be visualized or post-processed component-wise.
             for (int i = 0; i < jacobian[0]->size(0); ++i) {
                 // calculate the stress values for all collocation points
                 sigma_xx[i] = lambda_ * (ux_x[i] + uy_y[i]+ uz_z[i]) + 2 * mu_ * ux_x[i]; //-> normal stress in x-direction
@@ -1242,7 +1296,9 @@ public:
             appendToJsonFile("net_ZStresses", netZStresses_j);
             //appendToJsonFile("net_Poisson", netPoisson_j);
 
-            // CALCULATE THE NEW POSITION OF THE COLLPTS
+            // -------------------------
+            // Deformed collocation points
+            // -------------------------
 
             // create a tensor of the collocation points
             torch::Tensor collPtsFirstAsTensor = torch::stack(
@@ -1272,7 +1328,9 @@ public:
             // write the collocation points' new position to the json file
             appendToJsonFile("net_collPtsFirstAfterDisplacementAsTensor", collPtsFirstDispl_j);
 
-            // WRITING DIVERGENCE OF THE STRESS TENSOR TO JSON FILE
+            // -------------------------
+            // Residual diagnostics
+            // -------------------------
 
             nlohmann::json netDivergenceX_j = nlohmann::json::array();
             nlohmann::json netDivergenceY_j = nlohmann::json::array();

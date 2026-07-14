@@ -1,3 +1,11 @@
+"""Visualize the 2D multi-patch elasticity result with splinepy.
+
+Besides the patch geometry itself, this script also shows diagnostic point
+sets such as interior collocation points, traction-free points, force points,
+and interface points. That makes it useful for debugging the collocation
+placement as well as the final deformation.
+"""
+
 import argparse
 import json
 from pathlib import Path
@@ -11,7 +19,7 @@ REPO_ROOT = SCRIPT_DIR.parents[3]
 DEFAULT_RESULT_PATH = REPO_ROOT / "results" / "result_iganet_lin_elasticity_2D_multipatch_parametric.json"
 DEFAULT_OUTPUT_PATH = REPO_ROOT / "results" / "iganet_lin_elasticity_2D_multipatch_parametric.png"
 
-
+# Helper functions keep the actual plotting logic in main() compact.
 def load_result(path: Path):
     with path.open() as f:
         data = json.load(f)
@@ -19,6 +27,8 @@ def load_result(path: Path):
 
 
 def make_patch(patch_data, deformed=False):
+    # The result file stores a full spline description per patch, so the
+    # visualization can be reconstructed without reopening the source XML.
     degrees = patch_data["degrees"]
     knot_vectors = patch_data["knot_vectors"]
     control_points = (
@@ -35,6 +45,8 @@ def make_patch(patch_data, deformed=False):
 
 
 def style_patches(patches):
+    # Showing control points is useful here because the script is often used
+    # for debugging patch interfaces and collocation placement.
     for patch in patches:
         if hasattr(patch, "show_options"):
             patch.show_options["control_points"] = True
@@ -42,6 +54,8 @@ def style_patches(patches):
 
 
 def flatten_points(entries, key="points"):
+    # Point data is stored patch-wise or interface-wise in the result file.
+    # For visualization we flatten it into one simple list per category.
     points = []
     for entry in entries:
         points.extend(entry.get(key, []))
@@ -57,6 +71,7 @@ def make_vertices(points, color, radius=12):
 
 
 def main():
+    # Rebuild reference and deformed patches, then overlay point diagnostics.
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "result",
@@ -93,6 +108,11 @@ def main():
     interface_points = flatten_points(collocation.get("interface", []), key="points_patch1")
 
     overlays = []
+    # The colors below are intentionally semantic:
+    # black = interior PDE points,
+    # blue  = traction-free boundary points,
+    # red   = prescribed-force boundary points,
+    # orange = interface points.
     for obj in [
         make_vertices(interior_points, "black", 10),
         make_vertices(tfbc_points, "blue", 14),

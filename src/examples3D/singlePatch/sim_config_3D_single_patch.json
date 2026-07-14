@@ -1,4 +1,12 @@
 {
+  "_documentation": {
+    "purpose": "Configuration for the 3D single-patch elasticity example.",
+    "notes": [
+      "geometry.mode can switch between parametric and XML-based geometry construction.",
+      "solution_spline defines the displacement approximation space.",
+      "single_patch_3D contains the physical boundary value problem."
+    ]
+  },
   "simulation": {
     "max_epoch": 5,
     "min_loss": 1e-06,
