@@ -29,6 +29,7 @@ def find_repo_root(start: Path) -> Path:
 
 REPO_ROOT = find_repo_root(SCRIPT_DIR)
 DEFAULT_RESULT_PATH = REPO_ROOT / "results" / "result_iganet_lin_elasticity_2D.json"
+OPTIMIZED_RESULT_PATH = REPO_ROOT / "results" / "result_iganet_lin_elasticity_2D_optimized.json"
 DEFAULT_OUTPUT_PATH = REPO_ROOT / "results" / "iganet_lin_elasticity_2D.png"
 
 # Small helpers below keep the main plotting flow compact and readable.
@@ -117,26 +118,26 @@ def make_reference_object(data, degree):
     return make_bspline(as_ctrlpts(data, "stdCollCtrlPts"), degree, "stdCollCtrlPts")
 
 
-def main():
-    # The plotting workflow is:
-    #   1. read the result JSON,
-    #   2. rebuild splinepy objects,
-    #   3. show and save the reference/deformed comparison.
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "result",
-        nargs="?",
-        default=str(DEFAULT_RESULT_PATH),
-        help="Path to the single-patch 2D result json",
-    )
-    parser.add_argument(
-        "--output",
-        default=str(DEFAULT_OUTPUT_PATH),
-        help="Path to the output PNG file",
-    )
-    args = parser.parse_args()
+def derive_output_path(result_path: Path) -> Path:
+    stem = result_path.stem
+    if stem.startswith("result_"):
+        stem = stem[len("result_"):]
+    return REPO_ROOT / "results" / f"{stem}.png"
 
-    result_path = Path(args.result)
+
+def resolve_result_paths(result_arg):
+    if result_arg is not None:
+        return [Path(result_arg)]
+
+    candidates = [DEFAULT_RESULT_PATH, OPTIMIZED_RESULT_PATH]
+    existing = [candidate for candidate in candidates if candidate.exists()]
+    if existing:
+        return existing
+
+    return [DEFAULT_RESULT_PATH]
+
+
+def render_result(result_path: Path, output_path: Path):
     data = load_result(result_path)
 
     if "net_Degree" not in data:
@@ -146,7 +147,6 @@ def main():
     reference = make_reference_object(data, degree)
     iganet_solution = make_iganet_object(data, degree)
 
-    output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if reference is None:
@@ -173,9 +173,10 @@ def main():
         else:
             raise AttributeError("vedo.screenshot not available")
     except Exception as exc:
-        print(f"Could not save screenshot with vedo: {exc}")
+        print(f"Could not save screenshot with vedo for {result_path}: {exc}")
         raise
 
+    print(f"Showing {result_path}")
     if reference is None:
         splinepy.show(
             ["IgANet Solution", iganet_solution],
@@ -189,6 +190,34 @@ def main():
             control_mesh=False,
             control_point_ids=False,
         )
+
+
+def main():
+    # The plotting workflow is:
+    #   1. resolve one or more result JSON files,
+    #   2. rebuild splinepy objects for each file,
+    #   3. save screenshots and open interactive views.
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "result",
+        nargs="?",
+        default=None,
+        help="Optional path to a specific single-patch result json",
+    )
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Optional path to the output PNG file (only used when one result file is shown)",
+    )
+    args = parser.parse_args()
+
+    result_paths = resolve_result_paths(args.result)
+    if not result_paths:
+        raise FileNotFoundError("Could not find any matching single-patch result json files.")
+
+    for result_path in result_paths:
+        output_path = Path(args.output) if args.output is not None else derive_output_path(result_path)
+        render_result(Path(result_path), output_path)
 
 
 if __name__ == "__main__":
