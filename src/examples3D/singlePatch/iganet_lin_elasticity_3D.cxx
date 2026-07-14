@@ -1384,16 +1384,6 @@ int main() {
         return 1;
     }
 
-    // run standard collocation simulation with the parameters from the config file 
-    const std::string cmd =
-        "cd \"" + repo_root.string() + "\" && python3 -m std_collocation_python.run_std_coll src/examples3D/singlePatch/sim_config_3D_single_patch.json";
-
-    const int ret = std::system(cmd.c_str());
-    if (ret != 0) {
-        std::cerr << "ERROR: python reference run (std_collocation_python/run_std_coll.py) failed. system() returned " << ret << "\n";
-        return 1;
-    }
-
     // material parameters
     double YOUNG_MODULUS = 0.0;
     double POISSON_RATIO = 0.0;
@@ -1475,6 +1465,18 @@ int main() {
     } catch (const std::exception& e) {
         std::cerr << "Config error: " << e.what() << "\n";
         return 1;
+    }
+
+    if (RUN_COLL_REF_SIM) {
+        const std::string cmd =
+            "cd \"" + repo_root.string() + "\" && python3 -m std_collocation_python.run_std_coll \"" +
+            CONFIG_PATH.string() + "\" \"" + RESULT_JSON_PATH.string() + "\"";
+
+        const int ret = std::system(cmd.c_str());
+        if (ret != 0) {
+            std::cerr << "ERROR: python reference run (std_collocation_python/run_std_coll.py) failed. system() returned " << ret << "\n";
+            return 1;
+        }
     }
         
     // calculation of lame parameters

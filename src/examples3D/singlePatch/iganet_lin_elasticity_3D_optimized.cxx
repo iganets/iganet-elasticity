@@ -322,18 +322,7 @@ int main() {
         return 1;
     }
 
-    const std::string cmd =
-        "cd \"" + repoRoot.string() + "\" && python3 -m std_collocation_python.run_std_coll src/examples3D/singlePatch/sim_config_3D_single_patch.json";
-    // As in 2D, the external Python run creates a standard-collocation
-    // baseline that is stored alongside the IgANet result.
-    const int ret = std::system(cmd.c_str());
-    if (ret != 0) {
-        std::cerr << "ERROR: python reference run failed. system() returned "
-                  << ret << "\n";
-        return 1;
-    }
 
-  
     double  youngModulus        = 0.;
     double  poissonRatio        = 0.;
     int     maxEpoch            = 0;
@@ -342,6 +331,7 @@ int main() {
     int64_t nrCtrlPts           = 0;
     int     degreeCfg           = 0;
     bool    runGsRefSim         = false;
+    bool    runCollRefSim       = false;
     int     degreeRef           = 0;
 
     std::vector<std::tuple<int,double,double,double>> forceSides, diriSides;
@@ -373,12 +363,28 @@ int main() {
         bodyForce = {bf[0].get<double>(), bf[1].get<double>(), bf[2].get<double>()};
 
         if (j.contains("reference_simulation")) {
-            runGsRefSim = require(j,"reference_simulation.run_gs_ref_sim").get<bool>();
-            degreeRef   = require(j,"reference_simulation.degree_ref").get<int>();
+            runGsRefSim   = require(j,"reference_simulation.run_gs_ref_sim").get<bool>();
+            runCollRefSim = require(j,"reference_simulation.run_coll_ref_sim").get<bool>();
+            degreeRef     = require(j,"reference_simulation.degree_ref").get<int>();
         }
     } catch (const std::exception& e) {
         std::cerr << "Config error: " << e.what() << "\n";
         return 1;
+    }
+
+    if (runCollRefSim) {
+        const std::string cmd =
+            "cd \"" + repoRoot.string() +
+            "\" && python3 -m std_collocation_python.run_std_coll \"" +
+            CONFIG_PATH.string() + "\" \"" + RESULT_PATH.string() + "\"";
+        // As in 2D, the external Python run creates a standard-collocation
+        // baseline in the same result JSON as the IgANet solve.
+        const int ret = std::system(cmd.c_str());
+        if (ret != 0) {
+            std::cerr << "ERROR: python reference run failed. system() returned "
+                      << ret << "\n";
+            return 1;
+        }
     }
 
     const GeometryMode geoMode = parseGeometryMode(j);

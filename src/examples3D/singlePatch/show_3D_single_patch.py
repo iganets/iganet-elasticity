@@ -113,7 +113,7 @@ def make_iganet_object(data, degree):
 
 def make_reference_object(data, degree):
     if not has_key_nonempty(data, "stdCollCtrlPts"):
-        raise KeyError("Could not find 'stdCollCtrlPts' in result file.")
+        return None
     return make_bspline(as_ctrlpts(data, "stdCollCtrlPts"), degree, "stdCollCtrlPts")
 
 
@@ -146,13 +146,21 @@ def main():
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    splinepy.show(
-        ["Reference Solution", reference],
-        ["IgANet Solution", iganet_solution],
-        offscreen=True,
-        interactive=False,
-        close=True,
-    )
+    if reference is None:
+        splinepy.show(
+            ["IgANet Solution", iganet_solution],
+            offscreen=True,
+            interactive=False,
+            close=True,
+        )
+    else:
+        splinepy.show(
+            ["Reference Solution", reference],
+            ["IgANet Solution", iganet_solution],
+            offscreen=True,
+            interactive=False,
+            close=True,
+        )
 
     try:
         import vedo
@@ -165,12 +173,19 @@ def main():
         print(f"Could not save screenshot with vedo: {exc}")
         raise
 
-    splinepy.show(
-        ["Reference Solution", reference],
-        ["IgANet Solution", iganet_solution],
-        control_mesh=False,
-        control_point_ids=False,
-    )
+    if reference is None:
+        splinepy.show(
+            ["IgANet Solution", iganet_solution],
+            control_mesh=False,
+            control_point_ids=False,
+        )
+    else:
+        splinepy.show(
+            ["Reference Solution", reference],
+            ["IgANet Solution", iganet_solution],
+            control_mesh=False,
+            control_point_ids=False,
+        )
 
 
 if __name__ == "__main__":
