@@ -88,15 +88,18 @@ to the same JSON result file.
 
 This repository depends on `iganet`.
 
-The usual development layout is:
+The core is fetched with CMake `FetchContent` from GitHub. By default, CMake
+uses the repository and branch configured in `CMakeLists.txt`.
 
-```text
-.../Programmcode/
-├── iganet/
-└── iganet-elasticity/
+You can override the branch, tag, or commit at configure time:
+
+```bash
+cmake -S . -B build \
+  -DTorch_DIR=$HOME/libtorch/share/cmake/Torch \
+  -DIGANET_CORE_GIT_TAG=your_branch_or_commit
 ```
 
-If `../iganet` exists, CMake uses that local checkout automatically.
+A local `../iganet` checkout is not used automatically.
 
 ## Prerequisites
 
@@ -403,10 +406,11 @@ Edit the matching `show_*.py`.
 
 ## Troubleshooting
 
-### CMake cannot find the core repository
+### CMake cannot fetch the core repository
 
-Make sure `../iganet` exists next to this repository, or pass an explicit path
-for the core checkout in your CMake setup.
+Check that the machine has network access and that
+`IGANET_CORE_GIT_REPOSITORY` and `IGANET_CORE_GIT_TAG` point to an existing
+repository and branch, tag, or commit.
 
 ### CMake cannot find LibTorch
 
