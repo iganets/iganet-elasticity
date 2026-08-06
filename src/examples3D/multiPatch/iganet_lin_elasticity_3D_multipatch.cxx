@@ -57,7 +57,7 @@ std::filesystem::path resolveXmlPath(int argc, char** argv,
         }
     }
 
-    return "/usr2/obermair/Documents/02_Forschung/Betreuung/MA_Doboczky/bone_simplified.xml";
+    return repoRoot / "filedata" / "bone_simplified.xml";
 }
 
 std::string resolveBoundaryLabel(const nlohmann::json& j) {

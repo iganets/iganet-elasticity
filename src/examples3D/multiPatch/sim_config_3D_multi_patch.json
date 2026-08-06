@@ -4,11 +4,11 @@
     "notes": [
       "geometry typically points to a multi-patch XML file together with the chosen multipatch_id.",
       "geometry_spline and solution_spline control the patch-local spline spaces.",
-      "multipatch_3D lists loads and boundary conditions patch by patch."
+      "multipatch contains the global loads and boundary conditions used by iganet_lin_elasticity_3D_multipatch.cxx."
     ]
   },
   "simulation": {
-    "max_epoch": 5,
+    "max_epoch": 200,
     "min_loss": 1e-06,
     "supervised_learning": false,
     "device": "cpu"
@@ -25,8 +25,9 @@
   },
   "geometry": {
     "mode": "xml",
-    "multipatch_xml_path": "filedata/two_cube_parametric.xml",
-    "multipatch_id": 0
+    "multipatch_xml_path": "filedata/bone_simplified.xml",
+    "multipatch_id": 0,
+    "boundary_label": "BID1"
   },
   "geometry_spline": {
     "nr_ctrl_pts": 6,
@@ -36,58 +37,24 @@
     "nr_ctrl_pts": 6,
     "degree": 3
   },
-  "multipatch_3D": {
-    "patches": [
-      {
-        "patch_id": 100,
-        "body_force": [
+  "multipatch": {
+    "learning_rate": 0.01,
+    "dirichlet_weight": 100000.0,
+    "body_force": [
+      0.0,
+      0.0,
+      -10.0
+    ],
+    "boundary_conditions": {
+      "diri_sides": [
+        [
+          1,
           0.0,
           0.0,
           0.0
-        ],
-        "boundary_conditions": {
-          "force_sides": [],
-          "diri_sides": [
-            [
-              1,
-              0.0,
-              0.0,
-              0.0
-            ]
-          ],
-          "tfbc_sides": [
-            3,
-            4,
-            5,
-            6
-          ]
-        }
-      },
-      {
-        "patch_id": 101,
-        "body_force": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "boundary_conditions": {
-          "force_sides": [],
-          "diri_sides": [
-            [
-              2,
-              0.1,
-              0.0,
-              0.0
-            ]
-          ],
-          "tfbc_sides": [
-            3,
-            4,
-            5,
-            6
-          ]
-        }
-      }
-    ]
+        ]
+      ],
+      "force_sides": []
+    }
   }
 }
