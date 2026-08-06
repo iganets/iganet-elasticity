@@ -35,32 +35,23 @@ target_include_directories(iganet_elasticity_interface INTERFACE
 ########################################################################
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 
-  set(IGANET_CORE_LOCAL_SOURCE_DIR
-      "${PROJECT_SOURCE_DIR}/../iganet"
-      CACHE PATH "Path to a local IgANet core checkout")
+  set(IGANET_CORE_GIT_REPOSITORY
+      "https://github.com/iganets/iganet.git"
+      CACHE STRING "IgANet core git repository")
+  set(IGANET_CORE_GIT_TAG
+      "ober_multipatch"
+      CACHE STRING "IgANet core git branch, tag, or commit")
 
-  if(EXISTS "${IGANET_CORE_LOCAL_SOURCE_DIR}/CMakeLists.txt")
-    message(STATUS "Using local IgANet core from ${IGANET_CORE_LOCAL_SOURCE_DIR}")
-    add_subdirectory("${IGANET_CORE_LOCAL_SOURCE_DIR}" iganet_core)
-  else()
-    set(IGANET_CORE_GIT_REPOSITORY
-        "https://github.com/iganets/iganet.git"
-        CACHE STRING "IgANet core git repository")
-    set(IGANET_CORE_GIT_TAG
-        "ober_multipatch"
-        CACHE STRING "IgANet core git branch, tag, or commit")
-
-    message(STATUS
-            "Fetching IgANet core from ${IGANET_CORE_GIT_REPOSITORY} "
-            "(${IGANET_CORE_GIT_TAG})")
-    FetchContent_Declare(
-      iganet_core
-      GIT_REPOSITORY ${IGANET_CORE_GIT_REPOSITORY}
-      GIT_TAG ${IGANET_CORE_GIT_TAG}
-    )
-    FetchContent_MakeAvailable(iganet_core)
-    FetchContent_GetProperties(iganet_core)
-  endif()
+  message(STATUS
+          "Fetching IgANet core from ${IGANET_CORE_GIT_REPOSITORY} "
+          "(${IGANET_CORE_GIT_TAG})")
+  FetchContent_Declare(
+    iganet_core
+    GIT_REPOSITORY ${IGANET_CORE_GIT_REPOSITORY}
+    GIT_TAG ${IGANET_CORE_GIT_TAG}
+  )
+  FetchContent_MakeAvailable(iganet_core)
+  FetchContent_GetProperties(iganet_core)
   
   ######################################################################
   # Set C++ standard
