@@ -1,9 +1,9 @@
-"""Visualize the iganet_lin_elasticity_3D_multipatch result with splinepy.
+"""Visualize the iganet_lin_elasticity_3D_multipatch_parametrized result with splinepy.
 
 Rebuilds the reference and deformed patch set from that program's JSON
 result file and renders them side by side. This script is deliberately
-near-identical to show_3D_multi_patch_parametrized.py (which does the same
-for the other 3D multipatch example) rather than sharing a common module.
+near-identical to show_3D_multi_patch.py (which does the same for the
+other 3D multipatch example) rather than sharing a common module.
 """
 
 import argparse
@@ -29,8 +29,8 @@ def find_repo_root(start: Path) -> Path:
 
 
 REPO_ROOT = find_repo_root(SCRIPT_DIR)
-DEFAULT_RESULT_PATH = REPO_ROOT / "results" / "result_iganet_lin_elasticity_3D_multipatch.json"
-DEFAULT_OUTPUT_PATH = REPO_ROOT / "results" / "iganet_lin_elasticity_3D_multipatch.png"
+DEFAULT_RESULT_PATH = REPO_ROOT / "results" / "result_iganet_lin_elasticity_3D_multipatch_parametrized.json"
+DEFAULT_OUTPUT_PATH = REPO_ROOT / "results" / "iganet_lin_elasticity_3D_multipatch_parametrized.png"
 
 # Helper functions keep the main plotting routine compact.
 def derive_output_path(result_path: Path) -> Path:

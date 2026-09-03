@@ -1,0 +1,44 @@
+{
+  "_documentation": {
+    "purpose": "Configuration for iganet_lin_elasticity_3D_multipatch_parametrized.cxx (LBFGS-trained IgANet multipatch example, supports per-patch boundary conditions via patches_3d).",
+    "notes": [
+      "geometry.mode can be 'xml' (loads multipatch_xml_path) or 'parametric' (built procedurally in code).",
+      "geometry_spline and solution_spline must match (isoparametric solution space).",
+      "patches_3d sets per-patch Dirichlet (diri_sides) and traction (force_sides) boundary conditions, addressed by each patch's xml_id.",
+      "simulation.min_loss/min_loss_change/min_loss_rel_change from the IgANet core are hardcoded to (near-)disabled in this example; simulation.max_epoch is the only effective stopping criterion."
+    ]
+  },
+  "simulation": {
+    "max_epoch": 100,
+    "device": "cpu"
+  },
+  "material": {
+    "young_modulus": 210.0,
+    "poisson_ratio": 0.25
+  },
+  "geometry": {
+    "mode": "parametric",
+    "multipatch_xml_path": "filedata/five_patch_cube.xml",
+    "multipatch_id": 0
+  },
+  "geometry_spline": {
+    "nr_ctrl_pts": 6,
+    "degree": 3
+  },
+  "solution_spline": {
+    "nr_ctrl_pts": 6,
+    "degree": 3
+  },
+  "multipatch": {
+    "learning_rate": 0.01,
+    "body_force": [
+      0.0,
+      0.0,
+      0.0
+    ],
+   "boundary_conditions": {
+    "diri_sides": [ [1, 0.0, 0.0, 0.0] ],
+    "tfbc_sides": [2, 3, 4, 5, 6]
+}
+  }
+}

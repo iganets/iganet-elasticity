@@ -405,7 +405,7 @@ int main() {
     }
 
     const auto configPath = repoRoot / "src" / "examples3D" / "multiPatch" /
-                            "sim_config_3D_multi_patch.json";
+                            "sim_config_3D_multi_patch_parametrized.json";
     const auto resultPath =
         repoRoot / "results" / "result_iganet_lin_elasticity_3D_multipatch_parametrized.json";
     nlohmann::json j;

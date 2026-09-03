@@ -4,11 +4,12 @@
     "notes": [
       "geometry typically points to a multi-patch XML file together with the chosen multipatch_id.",
       "geometry_spline and solution_spline control the patch-local spline spaces.",
-      "multipatch contains the global loads and boundary conditions used by iganet_lin_elasticity_3D_multipatch.cxx."
+      "multipatch contains the global loads and boundary conditions used by iganet_lin_elasticity_3D_multipatch.cxx.",
+      "This file is used only by iganet_lin_elasticity_3D_multipatch.cxx. iganet_lin_elasticity_3D_multipatch_parametrized.cxx reads sim_config_3D_multi_patch_parametrized.json instead."
     ]
   },
   "simulation": {
-    "max_epoch": 200,
+    "max_epoch": 1000,
     "min_loss": 1e-06,
     "supervised_learning": false,
     "device": "cpu"
