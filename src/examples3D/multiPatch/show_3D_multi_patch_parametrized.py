@@ -2,7 +2,7 @@
 
 Rebuilds the reference and deformed patch set from that program's JSON
 result file and renders them side by side. This script is deliberately
-near-identical to show_3D_multi_patch.py (which does the same for the
+near-identical to show_3D_multi_patch_bone.py (which does the same for the
 other 3D multipatch example) rather than sharing a common module.
 """
 

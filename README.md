@@ -54,7 +54,7 @@ iganet-elasticity/
 - `src/examples2D/multiPatch/iganet_lin_elasticity_2D_multipatch_parametric.cxx`
 - `src/examples3D/singlePatch/iganet_lin_elasticity_3D.cxx`
 - `src/examples3D/singlePatch/iganet_lin_elasticity_3D_optimized.cxx`
-- `src/examples3D/multiPatch/iganet_lin_elasticity_3D_multipatch.cxx`
+- `src/examples3D/multiPatch/iganet_lin_elasticity_3D_multipatch_bone.cxx`
 - `src/examples3D/multiPatch/iganet_lin_elasticity_3D_multipatch_parametrized.cxx`
 
 ### Example configs
@@ -62,14 +62,15 @@ iganet-elasticity/
 - `src/examples2D/singlePatch/sim_config_2D_single_patch.json`
 - `src/examples2D/multiPatch/sim_config_2D_multi_patch.json`
 - `src/examples3D/singlePatch/sim_config_3D_single_patch.json`
-- `src/examples3D/multiPatch/sim_config_3D_multi_patch.json`
+- `src/examples3D/multiPatch/sim_config_3D_multi_patch_bone.json`
+- `src/examples3D/multiPatch/sim_config_3D_multi_patch_parametrized.json`
 
 ### Visualization scripts
 
 - `src/examples2D/singlePatch/show_2D_single_patch.py`
 - `src/examples2D/multiPatch/show_2D_multi_patch.py`
 - `src/examples3D/singlePatch/show_3D_single_patch.py`
-- `src/examples3D/multiPatch/show_3D_multi_patch.py`
+- `src/examples3D/multiPatch/show_3D_multi_patch_bone.py`
 
 ### Shared elasticity headers
 
@@ -157,7 +158,7 @@ cmake --build build -j 16 --target iganet_lin_elasticity_2D_optimized
 cmake --build build -j 16 --target iganet_lin_elasticity_2D_multipatch_parametric
 cmake --build build -j 16 --target iganet_lin_elasticity_3D
 cmake --build build -j 16 --target iganet_lin_elasticity_3D_optimized
-cmake --build build -j 16 --target iganet_lin_elasticity_3D_multipatch
+cmake --build build -j 16 --target iganet_lin_elasticity_3D_multipatch_bone
 cmake --build build -j 16 --target iganet_lin_elasticity_3D_multipatch_parametrized
 ```
 
@@ -194,10 +195,10 @@ Each executable reads its own config file from the matching example folder.
   - `src/examples3D/singlePatch/sim_config_3D_single_patch.json`
 - `iganet_lin_elasticity_3D_optimized`
   - `src/examples3D/singlePatch/sim_config_3D_single_patch.json`
-- `iganet_lin_elasticity_3D_multipatch`
-  - `src/examples3D/multiPatch/sim_config_3D_multi_patch.json`
+- `iganet_lin_elasticity_3D_multipatch_bone`
+  - `src/examples3D/multiPatch/sim_config_3D_multi_patch_bone.json`
 - `iganet_lin_elasticity_3D_multipatch_parametrized`
-  - `src/examples3D/multiPatch/sim_config_3D_multi_patch.json`
+  - `src/examples3D/multiPatch/sim_config_3D_multi_patch_parametrized.json`
 
 In practice:
 
@@ -232,7 +233,7 @@ Run the executables from the repository root:
 ### 3D multi-patch
 
 ```bash
-./build/iganet_lin_elasticity_3D_multipatch
+./build/iganet_lin_elasticity_3D_multipatch_bone
 ./build/iganet_lin_elasticity_3D_multipatch_parametrized
 ```
 
@@ -247,7 +248,7 @@ Typical files are:
 - `results/result_iganet_lin_elasticity_2D_multipatch_parametric.json`
 - `results/result_iganet_lin_elasticity_3D.json`
 - `results/result_iganet_lin_elasticity_3D_optimized.json`
-- `results/result_iganet_lin_elasticity_3D_multipatch.json`
+- `results/result_iganet_lin_elasticity_3D_multipatch_bone.json`
 - `results/result_iganet_lin_elasticity_3D_multipatch_parametrized.json`
 
 The exact JSON contents depend on the example. Depending on the case, a result
@@ -288,7 +289,7 @@ python src/examples3D/singlePatch/show_3D_single_patch.py
 ### 3D multi-patch
 
 ```bash
-python src/examples3D/multiPatch/show_3D_multi_patch.py
+python src/examples3D/multiPatch/show_3D_multi_patch_bone.py
 ```
 
 If you explicitly want to visualize a different JSON file, you can still pass
@@ -311,7 +312,7 @@ If you are new to the repository, start in this order:
 4. `iganet_lin_elasticity_3D_optimized`
 5. `iganet_lin_elasticity_3D`
 6. `iganet_lin_elasticity_3D_multipatch_parametrized`
-7. `iganet_lin_elasticity_3D_multipatch`
+7. `iganet_lin_elasticity_3D_multipatch_bone`
 
 That keeps the early workflow simple and makes debugging easier.
 
