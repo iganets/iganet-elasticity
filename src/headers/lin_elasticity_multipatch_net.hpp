@@ -21,8 +21,10 @@ struct MultipatchElasticityConfig {
     real_t youngModulus{210.0};
     real_t poissonRatio{0.25};
     real_t learningRate{1.0};
-    int maxEpoch{30};
+    int maxEpoch{100};
+    real_t minLoss{1e-6};
     int lbfgsHistorySize{50};
+    std::vector<int64_t> hiddenLayers{25, 25};
     int degree{2};
     int ncoeffs{3};
     std::array<real_t, 3> bodyForce{0.0, 0.0, 0.0};

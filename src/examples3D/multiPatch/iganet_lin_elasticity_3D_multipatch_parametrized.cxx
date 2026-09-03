@@ -139,6 +139,9 @@ config_t loadConfig(const nlohmann::json& j) {
 
     if (j.contains("simulation")) {
         cfg.maxEpoch = require(j, "simulation.max_epoch").get<int>();
+        if (j["simulation"].contains("min_loss")) {
+            cfg.minLoss = j["simulation"]["min_loss"].get<double>();
+        }
     }
 
     const auto geometrySplineCfg =
@@ -199,6 +202,10 @@ config_t loadConfig(const nlohmann::json& j) {
     }
 
     cfg.patchConfigs = iganet_elasticity::utils::config::load_patch_configs_3d(j);
+
+    if (j.contains("network") && j["network"].contains("hidden_layers")) {
+        cfg.hiddenLayers = j["network"]["hidden_layers"].get<std::vector<int64_t>>();
+    }
 
     if (cfg.degree < 1) {
         throw std::runtime_error("Multipatch degree must be >= 1");
@@ -390,6 +397,14 @@ void writeJsonFile(const std::filesystem::path& path, const nlohmann::json& data
     out << data.dump(1);
 }
 
+void finalizeIganet() {
+    if (torch::cuda::is_available()) {
+        iganet::finalize();
+    } else {
+        std::cout << "[INFO] Succeeded\n";
+    }
+}
+
 } // namespace
 
 int main() {
@@ -413,7 +428,7 @@ int main() {
         std::ifstream cfgFile(configPath);
         if (!cfgFile) {
             std::cerr << "Could not open config file: " << configPath << "\n";
-            iganet::finalize();
+            finalizeIganet();
             return 1;
         }
         cfgFile >> j;
@@ -458,25 +473,31 @@ int main() {
                     .fix_boundary_label(displacement, sideLabel(side), 2, std::get<3>(entry));
             }
         }
+        if (constraints.nfixed() == 0) {
+            throw std::runtime_error(
+                "Configured Dirichlet boundaries fixed no displacement DOFs");
+        }
 
         using optimizer_t = torch::optim::LBFGS;
         using net_t = iganet_elasticity::multipatch::linear_elasticity<optimizer_t, multipatch_t>;
 
         iganet::IgANetOptions netDefaults;
         netDefaults.max_epoch(cfg.maxEpoch);
-        netDefaults.min_loss(1e-12);
+        netDefaults.min_loss(cfg.minLoss);
         netDefaults.min_loss_change(0.0);
         netDefaults.min_loss_rel_change(0.0);
+
+        std::vector<std::vector<std::any>> activations(
+            cfg.hiddenLayers.size(), {iganet::activation::sigmoid});
+        activations.push_back({iganet::activation::none});
 
         net_t net(
             geometry,
             displacement,
             constraints,
             cfg,
-            {25, 25},
-            {{iganet::activation::sigmoid},
-             {iganet::activation::sigmoid},
-             {iganet::activation::none}},
+            cfg.hiddenLayers,
+            activations,
             netDefaults,
             options);
 
@@ -540,10 +561,10 @@ int main() {
                   << "======================================\n";
     } catch (const std::exception& e) {
         std::cerr << "Parametric MultiPatch example failed: " << e.what() << "\n";
-        iganet::finalize();
+        finalizeIganet();
         return 1;
     }
 
-    iganet::finalize();
+    finalizeIganet();
     return 0;
 }

@@ -1,0 +1,123 @@
+{
+  "simulation": {
+    "max_epoch": 10,
+    "min_loss": 1e-06,
+    "device": "cpu"
+  },
+  "material": {
+    "young_modulus": 210.0,
+    "poisson_ratio": 0.25
+  },
+  "geometry": {
+    "multipatch_xml_path": "filedata/bone_simplified.xml",
+    "multipatch_id": 0
+  },
+  "network": {
+    "hidden_layers": [25, 25]
+  },
+  "multipatch": {
+    "learning_rate": 0.01,
+    "lbfgs_history_size": 50,
+    "body_force": [0.0, 0.0, -10.0]
+  },
+  "patches_3d": [
+    {
+      "patch_id": 101,
+      "boundary_conditions": {
+        "diri_sides": [[6, 0.0, 0.0, 0.0]],
+        "force_sides": []
+      }
+    },
+    {
+      "patch_id": 102,
+      "boundary_conditions": {
+        "diri_sides": [[6, 0.0, 0.0, 0.0]],
+        "force_sides": []
+      }
+    },
+    {
+      "patch_id": 103,
+      "boundary_conditions": {
+        "diri_sides": [[6, 0.0, 0.0, 0.0]],
+        "force_sides": []
+      }
+    },
+    {
+      "patch_id": 104,
+      "boundary_conditions": {
+        "diri_sides": [[6, 0.0, 0.0, 0.0]],
+        "force_sides": []
+      }
+    },
+    {
+      "patch_id": 105,
+      "boundary_conditions": {
+        "diri_sides": [[6, 0.0, 0.0, 0.0]],
+        "force_sides": []
+      }
+    },
+    {
+      "patch_id": 107,
+      "boundary_conditions": {
+        "diri_sides": [[4, 0.0, 0.0, 0.0]],
+        "force_sides": []
+      }
+    },
+    {
+      "patch_id": 108,
+      "boundary_conditions": {
+        "diri_sides": [[4, 0.0, 0.0, 0.0]],
+        "force_sides": []
+      }
+    },
+    {
+      "patch_id": 109,
+      "boundary_conditions": {
+        "diri_sides": [[4, 0.0, 0.0, 0.0]],
+        "force_sides": []
+      }
+    },
+    {
+      "patch_id": 110,
+      "boundary_conditions": {
+        "diri_sides": [[4, 0.0, 0.0, 0.0]],
+        "force_sides": []
+      }
+    },
+    {
+      "patch_id": 111,
+      "boundary_conditions": {
+        "diri_sides": [[6, 0.0, 0.0, 0.0]],
+        "force_sides": []
+      }
+    },
+    {
+      "patch_id": 112,
+      "boundary_conditions": {
+        "diri_sides": [[4, 0.0, 0.0, 0.0], [6, 0.0, 0.0, 0.0]],
+        "force_sides": []
+      }
+    },
+    {
+      "patch_id": 113,
+      "boundary_conditions": {
+        "diri_sides": [[4, 0.0, 0.0, 0.0], [6, 0.0, 0.0, 0.0]],
+        "force_sides": []
+      }
+    },
+    {
+      "patch_id": 114,
+      "boundary_conditions": {
+        "diri_sides": [[4, 0.0, 0.0, 0.0], [6, 0.0, 0.0, 0.0]],
+        "force_sides": []
+      }
+    },
+    {
+      "patch_id": 115,
+      "boundary_conditions": {
+        "diri_sides": [[4, 0.0, 0.0, 0.0], [6, 0.0, 0.0, 0.0]],
+        "force_sides": []
+      }
+    }
+  ]
+}
