@@ -154,6 +154,9 @@ MultipatchConfig loadMultipatchConfig(const nlohmann::json& j) {
         if (mj.contains("lbfgs_history_size")) {
             cfg.lbfgsHistorySize = mj["lbfgs_history_size"].get<int>();
         }
+        if (mj.contains("collocation_weight")) {
+            cfg.collocationWeight = mj["collocation_weight"].get<double>();
+        }
     }
 
     if (j.contains("network") && j["network"].contains("hidden_layers")) {
