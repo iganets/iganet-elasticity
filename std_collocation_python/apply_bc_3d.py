@@ -29,7 +29,7 @@ class BCConfig3D:
     back:   BC   # side 6, z=1
 
 
-def _boundary_flags(i: int, j: int, k: int, mcp: int, ncp: int, lcp: int):
+def boundary_flags(i: int, j: int, k: int, mcp: int, ncp: int, lcp: int):
     """Returns per-face flags and a combined is_on_boundary flag."""
     on_left   = (i == 1)
     on_right  = (i == mcp)
@@ -41,7 +41,7 @@ def _boundary_flags(i: int, j: int, k: int, mcp: int, ncp: int, lcp: int):
     return on_left, on_right, on_bottom, on_top, on_front, on_back, is_on_bnd
 
 
-def _face_normal(face: str) -> np.ndarray:
+def face_normal(face: str) -> np.ndarray:
     """Outward unit normal for each face of the unit cube."""
     normals = {
         "left":   np.array([-1.0,  0.0,  0.0]),
@@ -63,7 +63,7 @@ _BC_PRIORITY = {"dirichlet": 3, "neumann": 2, "free": 1}
 _FACE_ORDER = ["left", "right", "bottom", "top", "front", "back"]   # lower index wins ties
 
 
-def _pick_active_face(on_left, on_right, on_bottom, on_top, on_front, on_back,
+def pick_active_face(on_left, on_right, on_bottom, on_top, on_front, on_back,
                       bc: BCConfig3D) -> str:
     """
     Among all faces this node touches, return the face whose BC has the highest
@@ -88,6 +88,84 @@ def _pick_active_face(on_left, on_right, on_bottom, on_top, on_front, on_back,
             best_prio = prio
             best_face = face
     return best_face   # never None for boundary nodes
+
+
+def traction_local_block(dN: np.ndarray, n: np.ndarray, mu: float, lam: float) -> np.ndarray:
+    """
+    Cauchy traction sigma(u)*n expressed as rows over the local (u,v,w) DOFs
+    of a single patch, i.e. sigma_ij = lam*div(u)*delta_ij + mu*(u_i,j + u_j,i).
+
+    Parameters
+    ----------
+    dN : shape (3, nnod) physical first derivatives [dx, dy, dz] of the patch's
+         own basis functions at the point of interest.
+    n  : shape (3,) unit normal (in physical space) at that point.
+
+    Returns
+    -------
+    k_rows : shape (3, 3*nnod) -- rows for t_x, t_y, t_z; columns are
+             u-DOFs (0::3), v-DOFs (1::3), w-DOFs (2::3).
+
+    Extracted from apply_bc_3d() so the same formula can be reused for
+    exterior Neumann/free boundaries (single patch) and for interior
+    patch-to-patch interface traction-continuity equations (multipatch).
+    """
+    nnod = dN.shape[1]
+    k_rows = np.zeros((3, 3*nnod), dtype=float)
+
+    nx, ny, nz = n
+    dNx = dN[0, :]
+    dNy = dN[1, :]
+    dNz = dN[2, :]
+
+    k_rows[0, 0::3] = (lam + 2*mu)*dNx*nx + mu*dNy*ny + mu*dNz*nz
+    k_rows[0, 1::3] = lam*dNy*nx + mu*dNx*ny
+    k_rows[0, 2::3] = lam*dNz*nx + mu*dNx*nz
+
+    k_rows[1, 0::3] = mu*dNy*nx + lam*dNx*ny
+    k_rows[1, 1::3] = mu*dNx*nx + (lam + 2*mu)*dNy*ny + mu*dNz*nz
+    k_rows[1, 2::3] = lam*dNz*ny + mu*dNy*nz
+
+    k_rows[2, 0::3] = mu*dNz*nx + lam*dNx*nz
+    k_rows[2, 1::3] = mu*dNz*ny + lam*dNy*nz
+    k_rows[2, 2::3] = mu*dNx*nx + mu*dNy*ny + (lam + 2*mu)*dNz*nz
+
+    return k_rows
+
+
+def interior_pde_local_block(dN: np.ndarray, ddN: np.ndarray, mu: float, lam: float) -> np.ndarray:
+    """
+    Strong-form Navier-Lame residual rows over the local (u,v,w) DOFs of a
+    single patch:  mu*Laplacian(u) + (lam+mu)*grad(div(u)) + f = 0.
+
+    Extracted from apply_bc_3d() so the same formula can be reused for
+    interior collocation points (single patch) and for interior-patch
+    collocation points of any one patch in a multipatch assembly.
+    """
+    dNxx = ddN[0, :]
+    dNxy = ddN[1, :]
+    dNxz = ddN[2, :]
+    dNyy = ddN[3, :]
+    dNyz = ddN[4, :]
+    dNzz = ddN[5, :]
+    dNlap = dNxx + dNyy + dNzz
+
+    nnod = dN.shape[1]
+    k_rows = np.zeros((3, 3*nnod), dtype=float)
+
+    k_rows[0, 0::3] = mu * dNlap + (lam + mu) * dNxx
+    k_rows[0, 1::3] = (lam + mu) * dNxy
+    k_rows[0, 2::3] = (lam + mu) * dNxz
+
+    k_rows[1, 0::3] = (lam + mu) * dNxy
+    k_rows[1, 1::3] = mu * dNlap + (lam + mu) * dNyy
+    k_rows[1, 2::3] = (lam + mu) * dNyz
+
+    k_rows[2, 0::3] = (lam + mu) * dNxz
+    k_rows[2, 1::3] = (lam + mu) * dNyz
+    k_rows[2, 2::3] = mu * dNlap + (lam + mu) * dNzz
+
+    return k_rows
 
 
 def apply_bc_3d(i: int, j: int, k: int,
@@ -118,17 +196,6 @@ def apply_bc_3d(i: int, j: int, k: int,
     f_gl       : shape (3*nnod,)    -- global RHS (modified in-place)
     """
 
-    # Unpack second derivatives
-    dNxx = ddN[0, :]   # d²N/dx²
-    dNxy = ddN[1, :]   # d²N/dxdy
-    dNxz = ddN[2, :]   # d²N/dxdz
-    dNyy = ddN[3, :]   # d²N/dy²
-    dNyz = ddN[4, :]   # d²N/dydz
-    dNzz = ddN[5, :]   # d²N/dz²
-
-    # Laplacian = dxx + dyy + dzz
-    dNlap = dNxx + dNyy + dNzz
-
     k_rk[:] = 0.0
 
     # Global DOF rows for this collocation point (0-based)
@@ -137,13 +204,13 @@ def apply_bc_3d(i: int, j: int, k: int,
     row_w = row_u + 2
 
     on_left, on_right, on_bottom, on_top, on_front, on_back, is_on_bnd = \
-        _boundary_flags(i, j, k, mcp, ncp, lcp)
+        boundary_flags(i, j, k, mcp, ncp, lcp)
 
     # ------------------------------------------------------------------ #
     #  BOUNDARY NODE                                                       #
     # ------------------------------------------------------------------ #
     if is_on_bnd:
-        face = _pick_active_face(on_left, on_right, on_bottom, on_top,
+        face = pick_active_face(on_left, on_right, on_bottom, on_top,
                                  on_front, on_back, bc)
         bc_obj = getattr(bc, face)
 
@@ -166,52 +233,16 @@ def apply_bc_3d(i: int, j: int, k: int,
             return k_rk, f_gl
 
         # --- Neumann or free: traction condition  sigma * n = t ---
-        n = _face_normal(face)
+        n = face_normal(face)
         if bc_obj.type == "neumann":
             t = bc_obj.value
         else:   # "free"
             t = np.zeros(3)
 
-        # Cauchy traction for isotropic linear elasticity:
-        # t_x = sigma_xx*nx + sigma_xy*ny + sigma_xz*nz
-        # t_y = sigma_yx*nx + sigma_yy*ny + sigma_yz*nz
-        # t_z = sigma_zx*nx + sigma_zy*ny + sigma_zz*nz
-        #
-        # with sigma_ij = lam*div(u)*delta_ij + mu*(u_i,j + u_j,i)
-        #
-        # Written in terms of the basis functions (u-DOFs at 0::3, v at 1::3, w at 2::3):
-        #
-        # traction x:
-        #   k[0, 0::3] * u_coeffs: (lam+2mu)*dNx*nx + mu*dNy*ny + mu*dNz*nz
-        #                        = (lam+2mu)*nx*dNx + mu*ny*dNy + mu*nz*dNz
-        #   k[0, 1::3] * v_coeffs: lam*ny*dNx + mu*nx*dNy
-        #   k[0, 2::3] * w_coeffs: lam*nz*dNx + mu*nx*dNz
-        #
-        # (and analogously for y and z rows)
-
-        nx, ny, nz = n
-
-        dNx = dN[0, :]
-        dNy = dN[1, :]
-        dNz = dN[2, :]
-
-        # -- row for t_x --
-        k_rk[0, 0::3] = (lam + 2*mu)*dNx*nx + mu*dNy*ny + mu*dNz*nz
-        k_rk[0, 1::3] = lam*dNy*nx + mu*dNx*ny
-        k_rk[0, 2::3] = lam*dNz*nx + mu*dNx*nz
-        f_gl[row_u]   = float(t[0])
-
-        # -- row for t_y --
-        k_rk[1, 0::3] = mu*dNy*nx + lam*dNx*ny
-        k_rk[1, 1::3] = mu*dNx*nx + (lam + 2*mu)*dNy*ny + mu*dNz*nz
-        k_rk[1, 2::3] = lam*dNz*ny + mu*dNy*nz
-        f_gl[row_v]   = float(t[1])
-
-        # -- row for t_z --
-        k_rk[2, 0::3] = mu*dNz*nx + lam*dNx*nz
-        k_rk[2, 1::3] = mu*dNz*ny + lam*dNy*nz
-        k_rk[2, 2::3] = mu*dNx*nx + mu*dNy*ny + (lam + 2*mu)*dNz*nz
-        f_gl[row_w]   = float(t[2])
+        k_rk[:] = traction_local_block(dN, n, mu, lam)
+        f_gl[row_u] = float(t[0])
+        f_gl[row_v] = float(t[1])
+        f_gl[row_w] = float(t[2])
 
         return k_rk, f_gl
 
@@ -219,30 +250,17 @@ def apply_bc_3d(i: int, j: int, k: int,
     #  INTERIOR NODE: strong-form Navier-Lamé                             #
     # ------------------------------------------------------------------ #
     # mu * Laplacian(u) + (lam + mu) * grad(div(u)) + f = 0
-    #
-    # x-equation: mu*(uxx+uyy+uzz) + (lam+mu)*(uxx+vxy+wxz) + fx = 0
-    # y-equation: mu*(uyx+vyy+vyz) + (lam+mu)*(uxy+vyy+wyz) + fy = 0   <- corrected
-    # z-equation: mu*(uzx+vzy+wzz) + (lam+mu)*(uxz+vyz+wzz) + fz = 0
 
+    # interior_pde_local_block() assembles div(sigma) on the left-hand side,
+    # and the equilibrium equation is div(sigma) + f = 0, so the right-hand
+    # side carries MINUS the body force. With +f the body moved against the
+    # applied load, e.g. a block under gravity rose instead of sagging.
     fx, fy, fz = body_force
-    f_gl[row_u] = fx
-    f_gl[row_v] = fy
-    f_gl[row_w] = fz
+    f_gl[row_u] = -fx
+    f_gl[row_v] = -fy
+    f_gl[row_w] = -fz
 
-    # x-equation  (row 0)
-    k_rk[0, 0::3] = mu * dNlap + (lam + mu) * dNxx   # coeff of u
-    k_rk[0, 1::3] = (lam + mu) * dNxy                 # coeff of v
-    k_rk[0, 2::3] = (lam + mu) * dNxz                 # coeff of w
-
-    # y-equation  (row 1)
-    k_rk[1, 0::3] = (lam + mu) * dNxy                 # coeff of u
-    k_rk[1, 1::3] = mu * dNlap + (lam + mu) * dNyy   # coeff of v
-    k_rk[1, 2::3] = (lam + mu) * dNyz                 # coeff of w
-
-    # z-equation  (row 2)
-    k_rk[2, 0::3] = (lam + mu) * dNxz                 # coeff of u
-    k_rk[2, 1::3] = (lam + mu) * dNyz                 # coeff of v
-    k_rk[2, 2::3] = mu * dNlap + (lam + mu) * dNzz   # coeff of w
+    k_rk[:] = interior_pde_local_block(dN, ddN, mu, lam)
 
     return k_rk, f_gl
 
