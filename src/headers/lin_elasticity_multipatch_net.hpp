@@ -24,6 +24,7 @@ struct MultipatchElasticityConfig {
     int maxEpoch{100};
     real_t minLoss{1e-6};
     int lbfgsHistorySize{50};
+    real_t collocationWeight{1.0};
     std::vector<int64_t> hiddenLayers{25, 25};
     int degree{2};
     int ncoeffs{3};
@@ -123,6 +124,7 @@ public:
         torch::Tensor target;
         torch::Tensor J;
         torch::Tensor invJ;
+        bool isForce{false};
     };
 
     struct InterfaceCache {
@@ -142,6 +144,7 @@ public:
         torch::Tensor total;
         torch::Tensor collocation;
         torch::Tensor traction;
+        torch::Tensor tfbc;
         torch::Tensor interfaceTraction;
     };
 
@@ -179,20 +182,22 @@ public:
         return true;
     }
 
-    torch::Tensor loss(const torch::Tensor& outputs, int64_t) override {
+    torch::Tensor loss(const torch::Tensor& outputs, int64_t epoch) override {
         const auto displacementTensor = constraints_.apply(outputs);
         const auto parts = loss_parts(displacementTensor);
         lastLossParts_ = {
             parts.total.detach().template item<double>(),
             parts.collocation.detach().template item<double>(),
             parts.traction.detach().template item<double>(),
+            parts.tfbc.detach().template item<double>(),
             parts.interfaceTraction.detach().template item<double>()};
         history_.push_back(lastLossParts_[0]);
-        std::cout << "loss"
+        std::cout << "epoch " << std::setw(6) << epoch
                   << " | total " << std::setw(14) << lastLossParts_[0]
                   << " | coll " << std::setw(14) << lastLossParts_[1]
                   << " | traction " << std::setw(14) << lastLossParts_[2]
-                  << " | interface " << std::setw(14) << lastLossParts_[3] << "\n";
+                  << " | tfbc " << std::setw(14) << lastLossParts_[3]
+                  << " | interface " << std::setw(14) << lastLossParts_[4] << "\n";
         return parts.total;
     }
 
@@ -292,6 +297,120 @@ private:
         return {J, invJ, hessG};
     }
 
+    /// @brief True if this side of this patch is glued to a neighbouring
+    /// patch rather than being an exterior face.
+    bool is_interface_side(std::size_t patchIndex, iganet::short_t side) const {
+        for (const auto& interface : geometry().interfaces()) {
+            if ((interface.patch1 == patchIndex && interface.side1 == side) ||
+                (interface.patch2 == patchIndex && interface.side2 == side)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    
+    int bc_priority(std::size_t patchIndex, iganet::short_t side) const {
+        
+        if (is_interface_side(patchIndex, side)) {
+            return 0;
+        }
+        if (has_patch_configs()) {
+            for (const auto& patchCfg : cfg_.patchConfigs) {
+                if (static_cast<std::size_t>(patchCfg.patch_id) != patchIndex) {
+                    continue;
+                }
+                for (const auto& entry : patchCfg.diri_sides) {
+                    if (entry.side == side) return 3;
+                }
+                for (const auto& entry : patchCfg.force_sides) {
+                    if (entry.side == side) return 2;
+                }
+                for (const auto other : patchCfg.tfbc_sides) {
+                    if (other == side) return 1;
+                }
+            }
+            return 0;
+        }
+        for (const auto& entry : cfg_.diriSides) {
+            if (std::get<0>(entry) == side) return 3;
+        }
+        for (const auto& entry : cfg_.forceSides) {
+            if (std::get<0>(entry) == side) return 2;
+        }
+        for (const auto other : cfg_.tfbcSides) {
+            if (other == side) return 1;
+        }
+        return 0;
+    }
+
+    /// @brief Two faces of a patch share an edge unless they are the same face
+    /// or lie opposite each other.
+    static bool sides_intersect(iganet::short_t a, iganet::short_t b) {
+        return a != b && MultiPatch::interface_type::side_direction(a) !=
+                             MultiPatch::interface_type::side_direction(b);
+    }
+
+    /// @brief Marks those points of a face that also lie on side `other`.
+    torch::Tensor points_on_side(std::size_t patchIndex,
+                                 const auto& xi,
+                                 iganet::short_t other) const {
+        const auto dir = MultiPatch::interface_type::side_direction(other);
+        const bool upper = MultiPatch::interface_type::side_parameter(other);
+        auto knots = geometry().patch(patchIndex).knots(dir).to(torch::kCPU).contiguous();
+        const double value = upper
+            ? knots.index({knots.numel() - 1}).template item<double>()
+            : knots.index({0}).template item<double>();
+        return torch::isclose(xi[dir], torch::full_like(xi[dir], value));
+    }
+
+    /// @brief Applies a keep mask to a point set.
+    static auto select_points(const auto& xi, const torch::Tensor& keep) {
+        auto result = xi;
+        const auto idx = torch::nonzero(keep).reshape({-1});
+        for (std::size_t d = 0; d < result.size(); ++d) {
+            result[d] = xi[d].index_select(0, idx);
+        }
+        return result;
+    }
+
+    /// @brief Keeps only the points of a boundary face that this side owns.
+    /// An edge or corner point is shared by two or three faces whose
+    /// conditions contradict each other, so exactly one side may claim it.
+    /// Without this, those points put an unsatisfiable term into the loss and
+    /// the optimizer trades the interior of the faces away to reduce it.
+    auto owned_side_points(std::size_t patchIndex, iganet::short_t side, const auto& xi) const {
+        auto keep = torch::ones_like(xi[0]).to(torch::kBool);
+        const int priority = bc_priority(patchIndex, side);
+        for (iganet::short_t other = 1; other <= 6; ++other) {
+            if (!sides_intersect(side, other)) {
+                continue;
+            }
+            const int otherPriority = bc_priority(patchIndex, other);
+            const bool otherWins = otherPriority > priority ||
+                                   (otherPriority == priority && other < side);
+            if (!otherWins) {
+                continue;
+            }
+            keep = torch::logical_and(
+                keep, torch::logical_not(points_on_side(patchIndex, xi, other)));
+        }
+        return select_points(xi, keep);
+    }
+
+
+    torch::Tensor interface_keep_mask(std::size_t patchIndex, const auto& xi) const {
+        auto keep = torch::ones_like(xi[0]).to(torch::kBool);
+        for (iganet::short_t other = 1; other <= 6; ++other) {
+            if (bc_priority(patchIndex, other) == 0) {
+                continue;
+            }
+            keep = torch::logical_and(
+                keep, torch::logical_not(points_on_side(patchIndex, xi, other)));
+        }
+        return keep;
+    }
+
     void prepare_caches() {
         patchResidualCaches_.clear();
         tractionCaches_.clear();
@@ -316,9 +435,13 @@ private:
             for (const auto& patchCfg : cfg_.patchConfigs) {
                 const auto patchIndex = static_cast<std::size_t>(patchCfg.patch_id);
                 for (const auto side : patchCfg.tfbc_sides) {
-                    auto xi = to_device(
-                        geometry().side_greville(patchIndex, static_cast<iganet::short_t>(side)),
-                        tensorOptions_.device());
+                    const auto sideNr = static_cast<iganet::short_t>(side);
+                    auto xiOwned = owned_side_points(
+                        patchIndex, sideNr, geometry().side_greville(patchIndex, sideNr));
+                    if (xiOwned[0].numel() == 0) {
+                        continue;
+                    }
+                    auto xi = to_device(xiOwned, tensorOptions_.device());
                     auto eval = prepare_point_set(patchIndex, xi);
                     auto [J, invJ, hessG] = prepare_geometry_terms(patchIndex, eval);
                     BoundaryTractionCache cache;
@@ -328,13 +451,18 @@ private:
                     cache.target = torch::zeros({1, 3}, tensorOptions_);
                     cache.J = std::move(J);
                     cache.invJ = std::move(invJ);
+                    cache.isForce = false;
                     tractionCaches_.push_back(std::move(cache));
                 }
 
                 for (const auto& entry : patchCfg.force_sides) {
-                    auto xi = to_device(
-                        geometry().side_greville(patchIndex, static_cast<iganet::short_t>(entry.side)),
-                        tensorOptions_.device());
+                    const auto sideNr = static_cast<iganet::short_t>(entry.side);
+                    auto xiOwned = owned_side_points(
+                        patchIndex, sideNr, geometry().side_greville(patchIndex, sideNr));
+                    if (xiOwned[0].numel() == 0) {
+                        continue;
+                    }
+                    auto xi = to_device(xiOwned, tensorOptions_.device());
                     auto eval = prepare_point_set(patchIndex, xi);
                     auto [J, invJ, hessG] = prepare_geometry_terms(patchIndex, eval);
                     BoundaryTractionCache cache;
@@ -345,13 +473,18 @@ private:
                                        .view({1, 3});
                     cache.J = std::move(J);
                     cache.invJ = std::move(invJ);
+                    cache.isForce = true;
                     tractionCaches_.push_back(std::move(cache));
                 }
             }
         } else {
             for (const auto& side : cfg_.tfbcSides) {
                 for (const auto& [boundary, xiRaw] : geometry().boundary_greville(side_label(side))) {
-                    auto xi = to_device(xiRaw, tensorOptions_.device());
+                    auto xiOwned = owned_side_points(boundary.patch, boundary.side, xiRaw);
+                    if (xiOwned[0].numel() == 0) {
+                        continue;
+                    }
+                    auto xi = to_device(xiOwned, tensorOptions_.device());
                     auto eval = prepare_point_set(boundary.patch, xi);
                     auto [J, invJ, hessG] = prepare_geometry_terms(boundary.patch, eval);
                     BoundaryTractionCache cache;
@@ -361,6 +494,7 @@ private:
                     cache.target = torch::zeros({1, 3}, tensorOptions_);
                     cache.J = std::move(J);
                     cache.invJ = std::move(invJ);
+                    cache.isForce = false;
                     tractionCaches_.push_back(std::move(cache));
                 }
             }
@@ -368,7 +502,11 @@ private:
             for (const auto& entry : cfg_.forceSides) {
                 const int side = std::get<0>(entry);
                 for (const auto& [boundary, xiRaw] : geometry().boundary_greville(side_label(side))) {
-                    auto xi = to_device(xiRaw, tensorOptions_.device());
+                    auto xiOwned = owned_side_points(boundary.patch, boundary.side, xiRaw);
+                    if (xiOwned[0].numel() == 0) {
+                        continue;
+                    }
+                    auto xi = to_device(xiOwned, tensorOptions_.device());
                     auto eval = prepare_point_set(boundary.patch, xi);
                     auto [J, invJ, hessG] = prepare_geometry_terms(boundary.patch, eval);
                     BoundaryTractionCache cache;
@@ -381,6 +519,7 @@ private:
                                        .view({1, 3});
                     cache.J = std::move(J);
                     cache.invJ = std::move(invJ);
+                    cache.isForce = true;
                     tractionCaches_.push_back(std::move(cache));
                 }
             }
@@ -389,6 +528,15 @@ private:
         interfaceCaches_.reserve(geometry().ninterfaces());
         for (const auto& interface : geometry().interfaces()) {
             auto [xi1, xi2] = geometry().interface_greville(interface);
+            
+            const auto keep = torch::logical_and(
+                interface_keep_mask(interface.patch1, xi1),
+                interface_keep_mask(interface.patch2, xi2));
+            xi1 = select_points(xi1, keep);
+            xi2 = select_points(xi2, keep);
+            if (xi1[0].numel() == 0) {
+                continue;
+            }
             xi1 = to_device(xi1, tensorOptions_.device());
             xi2 = to_device(xi2, tensorOptions_.device());
             auto eval1 = prepare_point_set(interface.patch1, xi1);
@@ -491,6 +639,7 @@ private:
     LossParts loss_parts(const torch::Tensor& displacementTensor) const {
         auto collocationLoss = torch::zeros({}, tensorOptions_);
         auto tractionLoss = torch::zeros({}, tensorOptions_);
+        auto tfbcLoss = torch::zeros({}, tensorOptions_);
         auto interfaceLoss = torch::zeros({}, tensorOptions_);
 
         for (const auto& cache : patchResidualCaches_) {
@@ -510,8 +659,13 @@ private:
             }
             const auto traction = traction_on_boundary(
                 cache.patchIndex, cache.side, displacementTensor, cache.eval, cache.J, cache.invJ);
-            tractionLoss = tractionLoss +
-                           torch::mse_loss(traction, cache.target.repeat({traction.size(0), 1}));
+            const auto mse =
+                torch::mse_loss(traction, cache.target.repeat({traction.size(0), 1}));
+            if (cache.isForce) {
+                tractionLoss = tractionLoss + mse;
+            } else {
+                tfbcLoss = tfbcLoss + mse;
+            }
         }
 
         for (const auto& cache : interfaceCaches_) {
@@ -526,9 +680,10 @@ private:
         }
 
         return {
-            collocationLoss + tractionLoss + interfaceLoss,
+            cfg_.collocationWeight * collocationLoss + tractionLoss + tfbcLoss + interfaceLoss,
             collocationLoss,
             tractionLoss,
+            tfbcLoss,
             interfaceLoss};
     }
 
@@ -559,8 +714,9 @@ private:
         }
 
         const auto fixed = static_cast<iganet::short_t>((side - 1) / 2);
-        const auto t0 = static_cast<iganet::short_t>(fixed == 0 ? 1 : 0);
-        const auto t1 = static_cast<iganet::short_t>(fixed == 2 ? 1 : 2);
+        
+        const auto t0 = static_cast<iganet::short_t>((fixed + 1) % 3);
+        const auto t1 = static_cast<iganet::short_t>((fixed + 2) % 3);
         const auto a = J.index({torch::indexing::Slice(), torch::indexing::Slice(), t0});
         const auto b = J.index({torch::indexing::Slice(), torch::indexing::Slice(), t1});
         auto normal = torch::cross(a, b, 1);
@@ -583,7 +739,7 @@ private:
     std::vector<PatchResidualCache> patchResidualCaches_;
     std::vector<BoundaryTractionCache> tractionCaches_;
     std::vector<InterfaceCache> interfaceCaches_;
-    std::array<double, 4> lastLossParts_{};
+    std::array<double, 5> lastLossParts_{};
     double lambda_{0.0};
     double mu_{0.0};
 };
