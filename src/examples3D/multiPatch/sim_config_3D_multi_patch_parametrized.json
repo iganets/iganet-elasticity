@@ -1,15 +1,23 @@
 {
   "_documentation": {
     "purpose": "Configuration for iganet_lin_elasticity_3D_multipatch_parametrized.cxx (LBFGS-trained IgANet multipatch example, supports per-patch boundary conditions via patches_3d).",
+    "test_cases": {
+      "ACTIVE (complex: stretch + opposite shear loads)": "diri_sides [[1,0,0,0],[2,0.3,0,0]], force_sides [[3,0,0,-10],[4,0,0,10]], tfbc_sides [5,6]. Left clamped, right pulled 0.3 along x, and the bottom (side 3) and top (side 4) faces are loaded with opposite z-tractions, so the chain is stretched and twisted/sheared at the same time. Max displacement per direction in the reference: x 0.35, y 0.25, z 0.29 (clearly visible at 1x).",
+      "simple (axial stretch, clearly visible at 1x)": "diri_sides [[1,0,0,0],[2,0.5,0,0]], force_sides [], tfbc_sides [3,4,5,6]. Left face clamped, right face pulled 0.5 along x (25% strain) with free sides: the chain visibly elongates and narrows (Poisson contraction). Check: reference u goes monotonically from 0 to 0.5.",
+      "bending (small, use --exaggerate 10 in the show script)": "diri_sides [[1,0,0,0],[2,0.5,0,0]], force_sides [[3,0,0,-1],[4,0,0,-1]], tfbc_sides [5,6]. Traction on the y faces adds a bending of only ~4% of the height.",
+      "shear (extreme, do not use for validation)": "diri_sides [[1,0,0,0],[2,0,0,3.0]] pulls the free end 3 units sideways: patches fold into each other, far outside linear elasticity.",
+      "rule": "A side must not appear in both tfbc_sides and force_sides (the C++ trainer would optimize two conflicting targets there)."
+    },
     "notes": [
       "geometry.mode can be 'xml' (loads multipatch_xml_path) or 'parametric' (built procedurally in code).",
       "geometry_spline and solution_spline must match (isoparametric solution space).",
       "patches_3d sets per-patch Dirichlet (diri_sides) and traction (force_sides) boundary conditions, addressed by each patch's xml_id.",
-      "simulation.min_loss/min_loss_change/min_loss_rel_change from the IgANet core are hardcoded to (near-)disabled in this example; simulation.max_epoch is the only effective stopping criterion."
+      "simulation.min_loss/min_loss_change/min_loss_rel_change from the IgANet core are hardcoded to (near-)disabled in this example; simulation.max_epoch is the only effective stopping criterion.",
+      "multipatch.num_patches/cube_size are read by std_collocation_python/run_multipatch_reference_3d.py (the classical collocation reference solution) to build a chain of that many unit cubes (edge length cube_size each) glued along x; side 1 is only the leftmost patch's x=0 face, side 2 only the rightmost patch's far x face, sides 3-6 apply to every patch's y/z faces. The IgANet trainer (iganet_lin_elasticity_3D_multipatch_parametrized.cxx) still hardcodes 2 cubes independently of these fields."
     ]
   },
   "simulation": {
-    "max_epoch": 100,
+    "max_epoch": 300,
     "device": "cpu"
   },
   "material": {
@@ -17,8 +25,8 @@
     "poisson_ratio": 0.25
   },
   "geometry": {
-    "mode": "parametric",
-    "multipatch_xml_path": "filedata/five_patch_cube.xml",
+    "mode": "xml",
+    "multipatch_xml_path": "filedata/five_cube_parametric.xml",
     "multipatch_id": 0
   },
   "geometry_spline": {
@@ -29,16 +37,23 @@
     "nr_ctrl_pts": 6,
     "degree": 3
   },
+  "network": {
+    "hidden_layers": [64,64]
+  },
+
   "multipatch": {
     "learning_rate": 0.01,
+    "num_patches": 5,
+    "cube_size": 1.0,
     "body_force": [
       0.0,
       0.0,
       0.0
     ],
    "boundary_conditions": {
-    "diri_sides": [ [1, 0.0, 0.0, 0.0] ],
-    "tfbc_sides": [2, 3, 4, 5, 6]
+    "diri_sides": [[1, 0.0, 0.0, 0.0], [2, 1.0, 0.0, 0.0] ],
+    "force_sides": [],
+    "tfbc_sides": [3, 4, 5, 6]
 }
   }
 }
