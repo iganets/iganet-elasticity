@@ -18,6 +18,7 @@
 #include <any>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -186,6 +187,9 @@ config_t loadConfig(const nlohmann::json& j) {
         }
         if (mj.contains("lbfgs_history_size")) {
             cfg.lbfgsHistorySize = mj["lbfgs_history_size"].get<int>();
+        }
+        if (mj.contains("collocation_weight")) {
+            cfg.collocationWeight = mj["collocation_weight"].get<double>();
         }
         if (mj.contains("boundary_conditions")) {
             const auto& bc = mj["boundary_conditions"];
@@ -397,6 +401,35 @@ void writeJsonFile(const std::filesystem::path& path, const nlohmann::json& data
     out << data.dump(1);
 }
 
+// Recomputes the classical collocation reference solution from the very same
+// config right after training, so that both result files always describe the
+// same load case. Without this, editing the config and re-training leaves a
+// reference from the previous settings behind, and the comparison in
+// show_3D_multi_patch_parametrized.py silently shows two different problems.
+// Disable via {"simulation": {"run_collocation_reference": false}}.
+void refreshCollocationReference(const std::filesystem::path& repoRoot,
+                                 const nlohmann::json& j) {
+    if (j.contains("simulation") &&
+        j["simulation"].contains("run_collocation_reference") &&
+        !j["simulation"]["run_collocation_reference"].get<bool>()) {
+        std::cout << "Skipping collocation reference refresh "
+                     "(simulation.run_collocation_reference is false)\n";
+        return;
+    }
+
+    const std::string command =
+        "cd \"" + repoRoot.string() + "\" && python3 -m "
+        "std_collocation_python.run_multipatch_reference_3d --quiet";
+    const int rc = std::system(command.c_str());
+    if (rc == 0) {
+        std::cout << "collocation reference refreshed from the same config\n";
+    } else {
+        std::cerr << "[WARN] Could not refresh the collocation reference "
+                     "(exit code " << rc << "). The reference result file may "
+                     "still belong to an earlier config.\n";
+    }
+}
+
 void finalizeIganet() {
     if (torch::cuda::is_available()) {
         iganet::finalize();
@@ -530,6 +563,7 @@ int main() {
         summary["displacement_scalar_dofs"] = displacementOut.ndofs();
         summary["strong_dirichlet_fixed_dofs"] = constraints.nfixed();
         summary["strong_dirichlet_free_dofs"] = constraints.nfree();
+        summary["max_epoch"] = cfg.maxEpoch;
         summary["loss_initial"] = history.empty() ? 0.0 : history.front();
         summary["loss_final"] = history.empty() ? 0.0 : history.back();
         summary["loss_history"] = history;
@@ -559,6 +593,8 @@ int main() {
                   << "loss final: " << summary["loss_final"] << "\n"
                   << "result: " << resultPath << "\n"
                   << "======================================\n";
+
+        refreshCollocationReference(repoRoot, j);
     } catch (const std::exception& e) {
         std::cerr << "Parametric MultiPatch example failed: " << e.what() << "\n";
         finalizeIganet();
