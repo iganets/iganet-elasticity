@@ -16,6 +16,7 @@ import argparse
 import colorsys
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import splinepy
@@ -167,6 +168,33 @@ def derive_loss_plot_path(output_path: Path) -> Path:
     return output_path.with_name(output_path.stem + "_loss" + output_path.suffix)
 
 
+PLOT_DIR = REPO_ROOT / "results" / "plots"
+
+
+def run_id_of(result_path: Path) -> str:
+    """The id the run wrote into its result file.
+
+    It is the key that ties a figure to its row in results/run_log.xlsx. Older
+    results have none; those fall back to the file's own timestamp, which is
+    close enough to find the right row by hand.
+    """
+    try:
+        raw = json.loads(result_path.read_text())
+        block = raw.get("multipatch_elasticity", raw)
+        stamp = block.get("run_id")
+        if stamp:
+            return str(stamp)
+    except (OSError, ValueError):
+        pass
+    return datetime.fromtimestamp(result_path.stat().st_mtime).strftime("%Y%m%d_%H%M%S")
+
+
+def figure_path(result_path: Path, kind: str) -> Path:
+    """results/plots/parametric_<run id>_<kind>.png"""
+    PLOT_DIR.mkdir(parents=True, exist_ok=True)
+    return PLOT_DIR / f"parametric_{run_id_of(result_path)}_{kind}.png"
+
+
 def plot_loss_history(loss_history, output_path: Path = None, interactive: bool = True, title: str = "Training Loss", max_epoch: int = None, enabled: bool = True):
     """Plot the per-epoch training loss in its own window, opened after the
     3D solution view is closed (or saved to a PNG when non-interactive).
@@ -200,7 +228,7 @@ def plot_loss_history(loss_history, output_path: Path = None, interactive: bool 
     fig, ax = plt.subplots(num=title)
     ax.plot(epochs, loss_history)
     ax.set_xlabel(xlabel)
-    ax.set_ylabel("Total loss")
+    ax.set_ylabel("Total Loss")
     ax.set_yscale("log")
     ax.set_title(title)
     ax.grid(True, which="both", alpha=0.3)
@@ -279,6 +307,7 @@ def render_comparison(
     warn_if_stale(reference_path)
 
     if save_screenshot:
+        output_path = figure_path(trained_path, "ansicht")
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         splinepy.show(
@@ -302,15 +331,13 @@ def render_comparison(
 
         print(f"Screenshot saved to {output_path}")
 
-    # Only the trained IgANet result has a per-epoch loss curve; the
-    # classical collocation reference is solved directly, not trained.
     loss_history = trained_result.get("loss_history")
-    loss_output_path = derive_loss_plot_path(output_path) if save_screenshot else None
+    loss_output_path = figure_path(trained_path, "loss") if save_screenshot else None
 
     if not interactive:
         print("Skipping interactive window (--no-interactive).")
         plot_loss_history(loss_history, enabled=plot_loss, max_epoch=trained_result.get("max_epoch"), output_path=loss_output_path, interactive=False,
-                          title="Training Loss (trained IgANet result)")
+                          title="Trend in Training Loss")
         return
 
     splinepy.show(
@@ -321,7 +348,7 @@ def render_comparison(
     )
 
     plot_loss_history(loss_history, enabled=plot_loss, max_epoch=trained_result.get("max_epoch"), output_path=loss_output_path, interactive=True,
-                      title="Training Loss (trained IgANet result)")
+                      title="Trend in Training Loss")
 
 
 def render_result(
@@ -347,6 +374,7 @@ def render_result(
         print_patch_legend(patches)
 
     if save_screenshot:
+        output_path = figure_path(result_path, "ansicht")
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         if deformed_only:
@@ -380,7 +408,7 @@ def render_result(
 
     print(f"Showing {result_path}")
     loss_history = result.get("loss_history")
-    loss_output_path = derive_loss_plot_path(output_path) if save_screenshot else None
+    loss_output_path = figure_path(result_path, "loss") if save_screenshot else None
 
     if not interactive:
         print("Skipping interactive window (--no-interactive).")
@@ -478,11 +506,12 @@ def main():
              "Useful to make a small but real deformation visible.",
     )
     parser.add_argument(
-        "--screenshot",
-        action="store_true",
-        help="Save a PNG screenshot of the 3D view (to --output, or its default path) and the loss plot (same name with _loss suffix). "
-             "Off by default; combine with --no-interactive for a purely headless run "
-             "that still produces an image.",
+        "--no-screenshot",
+        dest="screenshot",
+        action="store_false",
+        help="Do NOT save the figures. By default both the 3D view and the loss "
+             "plot are written to results/plots/, named after the run id from the "
+             "result file so they can be matched to their row in run_log.xlsx.",
     )
     args = parser.parse_args()
 
