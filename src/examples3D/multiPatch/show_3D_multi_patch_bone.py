@@ -1,7 +1,10 @@
 """Visualize the iganet_lin_elasticity_3D_multipatch_bone result with splinepy.
 
-Rebuilds the reference and deformed patch set from that program's JSON
-result file and renders them side by side. This script is deliberately
+By default, renders the deformed shape from the classical collocation
+reference solution (std_collocation_python/run_bone_reference_3d.py) on the
+left against the deformed shape from the trained IgANet result on the right.
+Pass --single to fall back to one result file's own reference-vs-deformed
+view. This script is deliberately
 near-identical to show_3D_multi_patch_parametrized.py (which does the same
 for the other 3D multipatch example) rather than sharing a common module.
 """
@@ -9,6 +12,7 @@ for the other 3D multipatch example) rather than sharing a common module.
 import argparse
 import colorsys
 import json
+from datetime import datetime
 from pathlib import Path
 
 import splinepy
@@ -30,7 +34,37 @@ def find_repo_root(start: Path) -> Path:
 
 REPO_ROOT = find_repo_root(SCRIPT_DIR)
 DEFAULT_RESULT_PATH = REPO_ROOT / "results" / "result_iganet_lin_elasticity_3D_multipatch_bone.json"
+DEFAULT_TRAINED_RESULT_PATH = DEFAULT_RESULT_PATH
+DEFAULT_REFERENCE_RESULT_PATH = (
+    REPO_ROOT / "results" / "result_collocation_reference_3D_multipatch_bone.json"
+)
 DEFAULT_OUTPUT_PATH = REPO_ROOT / "results" / "iganet_lin_elasticity_3D_multipatch_bone.png"
+DEFAULT_COMPARISON_OUTPUT_PATH = (
+    REPO_ROOT / "results" / "collocation_reference_vs_trained_3D_multipatch_bone.png"
+)
+CONFIG_PATH = SCRIPT_DIR / "sim_config_3D_multi_patch_bone.json"
+TRAINER_CMD = "./build/iganet_lin_elasticity_3D_multipatch_bone"
+
+
+def is_stale(path: Path) -> bool:
+    """A result older than the config was computed with different boundary
+    conditions, so comparing it against a fresh one shows two different load
+    cases side by side."""
+    return (CONFIG_PATH.exists() and path.exists()
+            and path.stat().st_mtime < CONFIG_PATH.stat().st_mtime)
+
+
+def warn_if_stale(path: Path):
+    if not is_stale(path):
+        return False
+    print("=" * 78)
+    print(f"  WARNING: {path.name}")
+    print(f"  is OLDER than {CONFIG_PATH.name}.")
+    print("  It was computed with different boundary conditions, so the two sides of")
+    print("  the comparison do NOT show the same load case. Re-run the trainer first:")
+    print(f"      {TRAINER_CMD}")
+    print("=" * 78)
+    return True
 
 # Helper functions keep the main plotting routine compact.
 def derive_output_path(result_path: Path) -> Path:
@@ -48,6 +82,7 @@ def resolve_result_paths(result_arg):
 
 
 def load_result(path: Path):
+    warn_if_stale(path)
     with path.open() as file:
         data = json.load(file)
     return data["multipatch_elasticity"]
@@ -106,6 +141,33 @@ def derive_loss_plot_path(output_path: Path) -> Path:
     return output_path.with_name(output_path.stem + "_loss" + output_path.suffix)
 
 
+PLOT_DIR = REPO_ROOT / "results" / "plots"
+
+
+def run_id_of(result_path: Path) -> str:
+    """The id the run wrote into its result file.
+
+    It is the key that ties a figure to its row in results/run_log.xlsx. Older
+    results have none; those fall back to the file's own timestamp, which is
+    close enough to find the right row by hand.
+    """
+    try:
+        raw = json.loads(result_path.read_text())
+        block = raw.get("multipatch_elasticity", raw)
+        stamp = block.get("run_id")
+        if stamp:
+            return str(stamp)
+    except (OSError, ValueError):
+        pass
+    return datetime.fromtimestamp(result_path.stat().st_mtime).strftime("%Y%m%d_%H%M%S")
+
+
+def figure_path(result_path: Path, kind: str) -> Path:
+    """results/plots/bone_<run id>_<kind>.png"""
+    PLOT_DIR.mkdir(parents=True, exist_ok=True)
+    return PLOT_DIR / f"bone_{run_id_of(result_path)}_{kind}.png"
+
+
 def plot_loss_history(loss_history, output_path: Path = None, interactive: bool = True, title: str = "Training Loss", max_epoch: int = None, enabled: bool = True):
     """Plot the per-epoch training loss in its own window, opened after the
     3D solution view is closed (or saved to a PNG when non-interactive).
@@ -155,6 +217,71 @@ def plot_loss_history(loss_history, output_path: Path = None, interactive: bool 
         plt.close(fig)
 
 
+def render_comparison(reference_path: Path, trained_path: Path, output_path: Path,
+                      show_patch_ids: bool, interactive: bool = True,
+                      exaggerate: float = 1.0, plot_loss: bool = True,
+                      save_screenshot: bool = False):
+    # Left: classical collocation reference (direct linear solve).
+    # Right: trained IgANet result. Both deformed, so they compare directly.
+    reference_result = load_result(reference_path)
+    trained_result = load_result(trained_path)
+
+    reference_patches = [make_patch(p, deformed=True, exaggerate=exaggerate)
+                         for p in reference_result["patches"]]
+    trained_patches = [make_patch(p, deformed=True, exaggerate=exaggerate)
+                       for p in trained_result["patches"]]
+    style_patches(reference_patches)
+    style_patches(trained_patches)
+
+    if show_patch_ids:
+        print("Reference solution:")
+        print_patch_legend(reference_result["patches"])
+        print("Trained solution:")
+        print_patch_legend(trained_result["patches"])
+
+    if save_screenshot:
+        output_path = figure_path(trained_path, "ansicht")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        splinepy.show([*reference_patches], [*trained_patches],
+                      offscreen=True, interactive=False, close=True)
+        try:
+            import vedo
+
+            if hasattr(vedo, "screenshot"):
+                vedo.screenshot(str(output_path), scale=2)
+            else:
+                raise AttributeError("vedo.screenshot not available")
+        except Exception as exc:
+            print(f"Could not save screenshot with vedo for comparison: {exc}")
+            raise
+        print(f"Screenshot saved to {output_path}")
+
+    print(f"Reference (left):  {reference_path}")
+    print(f"Trained (right):   {trained_path}")
+
+    # Last thing before the windows open, so it cannot be overlooked.
+    warn_if_stale(trained_path)
+    warn_if_stale(reference_path)
+
+    loss_history = trained_result.get("loss_history")
+    loss_output_path = figure_path(trained_path, "loss") if save_screenshot else None
+
+    if not interactive:
+        print("Skipping interactive window (--no-interactive).")
+        plot_loss_history(loss_history, enabled=plot_loss,
+                          max_epoch=trained_result.get("max_epoch"),
+                          output_path=loss_output_path, interactive=False,
+                          title="Training Loss (trained IgANet result)")
+        return
+
+    splinepy.show([*reference_patches], [*trained_patches],
+                  control_mesh=False, control_point_ids=False)
+    plot_loss_history(loss_history, enabled=plot_loss,
+                      max_epoch=trained_result.get("max_epoch"),
+                      output_path=loss_output_path, interactive=True,
+                      title="Training Loss (trained IgANet result)")
+
+
 def render_result(result_path: Path, output_path: Path, deformed_only: bool, show_patch_ids: bool, interactive: bool = True, exaggerate: float = 1.0, plot_loss: bool = True, save_screenshot: bool = False):
     result = load_result(result_path)
     patches = result["patches"]
@@ -169,6 +296,7 @@ def render_result(result_path: Path, output_path: Path, deformed_only: bool, sho
         print_patch_legend(patches)
 
     if save_screenshot:
+        output_path = figure_path(result_path, "ansicht")
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         if deformed_only:
@@ -202,7 +330,7 @@ def render_result(result_path: Path, output_path: Path, deformed_only: bool, sho
 
     print(f"Showing {result_path}")
     loss_history = result.get("loss_history")
-    loss_output_path = derive_loss_plot_path(output_path) if save_screenshot else None
+    loss_output_path = figure_path(result_path, "loss") if save_screenshot else None
 
     if not interactive:
         print("Skipping interactive window (--no-interactive).")
@@ -233,7 +361,26 @@ def main():
         "result",
         nargs="?",
         default=None,
-        help="Optional path to a specific 3D multipatch result json",
+        help="Optional path to a specific 3D multipatch result json "
+             "(implies --single unless --reference/--trained are used)",
+    )
+    parser.add_argument(
+        "--single",
+        action="store_true",
+        help="Show one result file's reference-vs-deformed view instead of "
+             "the reference-vs-trained comparison",
+    )
+    parser.add_argument(
+        "--reference",
+        default=None,
+        help=f"Path to the collocation reference result json "
+             f"(default: {DEFAULT_REFERENCE_RESULT_PATH})",
+    )
+    parser.add_argument(
+        "--trained",
+        default=None,
+        help=f"Path to the trained IgANet result json "
+             f"(default: {DEFAULT_TRAINED_RESULT_PATH})",
     )
     parser.add_argument(
         "--deformed-only",
@@ -270,13 +417,37 @@ def main():
         help="Skip the separate training-loss plot window shown after the 3D solution",
     )
     parser.add_argument(
-        "--screenshot",
-        action="store_true",
-        help="Save a PNG screenshot of the 3D view (to --output, or its default path) and the loss plot (same name with _loss suffix). "
-             "Off by default; combine with --no-interactive for a purely headless run "
-             "that still produces an image.",
+        "--no-screenshot",
+        dest="screenshot",
+        action="store_false",
+        help="Do NOT save the figures. By default both the 3D view and the loss "
+             "plot are written to results/plots/, named after the run id from the "
+             "result file so they can be matched to their row in run_log.xlsx.",
     )
     args = parser.parse_args()
+
+    use_single = args.single or (
+        args.result is not None and args.reference is None and args.trained is None
+    )
+
+    if not use_single:
+        reference_path = (Path(args.reference) if args.reference is not None
+                          else DEFAULT_REFERENCE_RESULT_PATH)
+        trained_path = (Path(args.trained) if args.trained is not None
+                        else DEFAULT_TRAINED_RESULT_PATH)
+        output_path = (Path(args.output) if args.output is not None
+                       else DEFAULT_COMPARISON_OUTPUT_PATH)
+        render_comparison(
+            reference_path,
+            trained_path,
+            output_path,
+            args.show_patch_ids,
+            interactive=not args.no_interactive,
+            exaggerate=args.exaggerate,
+            plot_loss=not args.no_loss_plot,
+            save_screenshot=args.screenshot,
+        )
+        return
 
     result_paths = resolve_result_paths(args.result)
     if not result_paths:
