@@ -19,6 +19,10 @@
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <sstream>
+#include <ctime>
+#include <chrono>
+#include <sys/wait.h>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -136,10 +140,40 @@ config_t loadConfig(const nlohmann::json& j) {
     if (j.contains("material")) {
         cfg.youngModulus = require(j, "material.young_modulus").get<double>();
         cfg.poissonRatio = require(j, "material.poisson_ratio").get<double>();
+
+        // Optional per-patch material. Every patch starts from the two values
+        // above and is then overwritten by its entry, if it has one, so a
+        // partial list is allowed. Note this is deliberately NOT patches_3d:
+        // filling that would switch the boundary conditions from the global
+        // side scheme to the per-patch one.
+        if (j["material"].contains("patches")) {
+            const auto& entries = j["material"]["patches"];
+            std::size_t highest = 0;
+            for (const auto& entry : entries) {
+                if (!entry.contains("patch_id")) {
+                    throw std::runtime_error("material.patches entry needs a patch_id");
+                }
+                highest = std::max(highest, entry["patch_id"].get<std::size_t>());
+            }
+            cfg.patchYoungModulus.assign(highest + 1, cfg.youngModulus);
+            cfg.patchPoissonRatio.assign(highest + 1, cfg.poissonRatio);
+            for (const auto& entry : entries) {
+                const auto id = entry["patch_id"].get<std::size_t>();
+                if (entry.contains("young_modulus")) {
+                    cfg.patchYoungModulus[id] = entry["young_modulus"].get<double>();
+                }
+                if (entry.contains("poisson_ratio")) {
+                    cfg.patchPoissonRatio[id] = entry["poisson_ratio"].get<double>();
+                }
+            }
+        }
     }
 
     if (j.contains("simulation")) {
         cfg.maxEpoch = require(j, "simulation.max_epoch").get<int>();
+        if (j["simulation"].contains("supervised_learning")) {
+            cfg.supervisedLearning = j["simulation"]["supervised_learning"].get<bool>();
+        }
         if (j["simulation"].contains("min_loss")) {
             cfg.minLoss = j["simulation"]["min_loss"].get<double>();
         }
@@ -190,6 +224,18 @@ config_t loadConfig(const nlohmann::json& j) {
         }
         if (mj.contains("collocation_weight")) {
             cfg.collocationWeight = mj["collocation_weight"].get<double>();
+        }
+        // Row scaling divides every residual by the norm of its own operator
+        // row. Disable with {"multipatch": {"row_scaling": false}} to reproduce
+        // the previous, badly conditioned loss.
+        if (mj.contains("row_scaling")) {
+            cfg.rowScaling = mj["row_scaling"].get<bool>();
+        }
+        if (mj.contains("row_scaling_probes")) {
+            cfg.rowScalingProbes = mj["row_scaling_probes"].get<int>();
+        }
+        if (mj.contains("supervised_weight")) {
+            cfg.supervisedWeight = mj["supervised_weight"].get<double>();
         }
         if (mj.contains("boundary_conditions")) {
             const auto& bc = mj["boundary_conditions"];
@@ -430,6 +476,108 @@ void refreshCollocationReference(const std::filesystem::path& repoRoot,
     }
 }
 
+/// @brief Appends one row per run to results/run_log.xlsx.
+///
+/// Records the settings the run used - epochs, material, hidden layers, body
+/// force and boundary conditions - together with what came out, so a series of
+/// runs can be compared afterwards without reconstructing which config
+/// produced which result. Never fails the run: a missing openpyxl or a locked
+/// workbook only prints a warning.
+void logRunToWorkbook(const std::filesystem::path& repoRoot,
+                      const std::string& sheet,
+                      const std::filesystem::path& configPath,
+                      const std::filesystem::path& resultPath) {
+    const std::string command =
+        "cd \"" + repoRoot.string() + "\" && python3 -m "
+        "std_collocation_python.log_run " + sheet + " \"" + configPath.string() +
+        "\" \"" + resultPath.string() + "\"";
+    const int rc = std::system(command.c_str());
+    if (rc != 0) {
+        // std::system hands back the raw wait status, not the exit code: a
+        // plain failure shows up as 256, not as 1. Unpack it so the message
+        // says what the script actually returned.
+        const int code = WIFEXITED(rc) ? WEXITSTATUS(rc) : rc;
+        std::cerr << "[WARN] Could not append this run to results/run_log.xlsx "
+                     "(exit code " << code << "). If the workbook is open in "
+                     "Excel it is locked; close it and the next run will "
+                     "record again.\n";
+    }
+}
+
+/// @brief Timestamp that ties a run together: it goes into the result file, into
+/// the row in results/run_log.xlsx and into the names of the saved figures, so a
+/// screenshot can still be matched to its settings weeks later. Written into the
+/// result rather than derived from a file date, because that survives copying.
+std::string makeRunId() {
+    const auto now = std::chrono::system_clock::now();
+    const auto stamp = std::chrono::system_clock::to_time_t(now);
+    std::ostringstream out;
+    out << std::put_time(std::localtime(&stamp), "%Y%m%d_%H%M%S");
+    return out.str();
+}
+
+/// @brief Reads the collocation reference and turns it into a target tensor in
+/// the trainer's own coefficient layout.
+///
+/// The reference stores its solution patch by patch. scatter_patch_values()
+/// maps that onto the global vector via the DOF map. Before doing so the
+/// control points of both files are compared: if the two disagree, the patch
+/// order or the control point order differs and the scatter would silently
+/// produce nonsense, so it is better to stop.
+template <typename MultiPatch>
+torch::Tensor loadSupervisedTarget(const std::filesystem::path& referencePath,
+                                   const MultiPatch& geometry,
+                                   const MultiPatch& displacement,
+                                   const torch::TensorOptions& options) {
+    std::ifstream in(referencePath);
+    if (!in) {
+        throw std::runtime_error(
+            "Supervised learning needs the collocation reference, but " +
+            referencePath.string() + " could not be opened.");
+    }
+    nlohmann::json ref;
+    in >> ref;
+    const auto& block = ref.contains("multipatch_elasticity")
+                            ? ref["multipatch_elasticity"] : ref;
+    if (!block.contains("patches")) {
+        throw std::runtime_error("Reference file has no \"patches\" section: " +
+                                 referencePath.string());
+    }
+
+    const auto readBlock = [](const nlohmann::json& node) {
+        std::vector<std::array<double, 3>> rows;
+        rows.reserve(node.size());
+        for (const auto& row : node) {
+            rows.push_back({row[0].get<double>(), row[1].get<double>(),
+                            row[2].get<double>()});
+        }
+        return rows;
+    };
+
+    std::vector<std::vector<std::array<double, 3>>> displacements, controlPoints;
+    for (const auto& patch : block["patches"]) {
+        displacements.push_back(readBlock(patch["displacements"]));
+        controlPoints.push_back(readBlock(patch["control_points"]));
+    }
+
+    // Sanity check: the same scatter applied to the reference's control points
+    // must reproduce the model's geometry.
+    const auto geometryFromReference =
+        scatter_patch_values(displacement, controlPoints, options);
+    const auto deviation =
+        (geometryFromReference - geometry.as_tensor()).abs().max().template item<double>();
+    if (deviation > 1e-6) {
+        throw std::runtime_error(
+            "Reference and model geometry disagree by " + std::to_string(deviation) +
+            ". The reference belongs to a different model, or the control point "
+            "order differs - the supervised target would be meaningless.");
+    }
+    std::cout << "supervised target loaded from " << referencePath.filename()
+              << " (geometry matches to " << deviation << ")\n";
+
+    return scatter_patch_values(displacement, displacements, options);
+}
+
 void finalizeIganet() {
     if (torch::cuda::is_available()) {
         iganet::finalize();
@@ -540,6 +688,15 @@ int main() {
         lbfgsOptions.tolerance_change(1e-12);
         net.optimizerOptionsReset(lbfgsOptions);
 
+        if (cfg.supervisedLearning) {
+            // The target must describe THIS config, so the reference is computed
+            // before training rather than after it as usual.
+            refreshCollocationReference(repoRoot, j);
+            net.set_supervised_target(loadSupervisedTarget(
+                repoRoot / "results" / "result_collocation_reference_3D_multipatch_parametrized.json",
+                geometry, displacement, options));
+        }
+
         net.train();
         net.eval();
 
@@ -551,6 +708,7 @@ int main() {
 
         nlohmann::json summary;
         summary["example"] = "multipatch_parametric_3d";
+        summary["run_id"] = makeRunId();
         summary["geometry_mode"] = (mode == GeometryMode::Xml ? "xml" : "parametric");
         summary["device"] = computeDevice.str();
         if (xmlPath.has_value()) {
@@ -595,6 +753,7 @@ int main() {
                   << "======================================\n";
 
         refreshCollocationReference(repoRoot, j);
+        logRunToWorkbook(repoRoot, "parametric", configPath, resultPath);
     } catch (const std::exception& e) {
         std::cerr << "Parametric MultiPatch example failed: " << e.what() << "\n";
         finalizeIganet();
