@@ -144,23 +144,27 @@ def mapping3d(i: int, j: int, k: int, nnod: int,
     # Index mapping for 6-vector: [0]=xx, [1]=xy, [2]=xz, [3]=yy, [4]=yz, [5]=zz
     # Parameter index mapping:    [0]=xi2,[1]=xi_eta,[2]=xi_zeta,[3]=eta2,[4]=eta_zeta,[5]=zeta2
 
-    Ji = J_inv  # (3,3), Ji[p,a] = dxi_p/dx_a
-
-    # H[m, n] maps physical index pair (a,b) to parameter pair (p,q):
-    # H[m, n] = Ji[p, a] * Ji[q, b]  where m=(a,b), n=(p,q) with symmetry
-    # Physical pairs: (0,0),(0,1),(0,2),(1,1),(1,2),(2,2)
-    # Parameter pairs: same ordering
+    # Chain rule for the second derivatives:
+    #   d2R/dxi_p dxi_q = sum_ab J[a,p] J[b,q] d2R/dx_a dx_b
+    #                     + sum_a  d2x_a/dxi_p dxi_q * dR/dx_a
+    # so the matrix below carries the FORWARD Jacobian J[a,p] = dx_a/dxi_p,
+    # not its inverse: the unknowns are the physical second derivatives and
+    # the right-hand side is parametric. Using J_inv here (and indexing the
+    # rows by physical instead of parametric pairs) made the transformation
+    # scale with the fourth power of the patch size, which stayed unnoticed
+    # on a unit cube, where J is the identity and both agree.
     phys_pairs  = [(0,0),(0,1),(0,2),(1,1),(1,2),(2,2)]
     param_pairs = [(0,0),(0,1),(0,2),(1,1),(1,2),(2,2)]
 
     H = np.zeros((6, 6), dtype=float)
-    for m, (a, b) in enumerate(phys_pairs):
-        for n, (p, q) in enumerate(param_pairs):
-            if p == q:
-                H[m, n] = Ji[p, a] * Ji[q, b]
+    for m, (p, q) in enumerate(param_pairs):        # row: parametric pair
+        for n, (a, b) in enumerate(phys_pairs):     # column: physical pair
+            if a == b:
+                H[m, n] = J[a, p] * J[b, q]
             else:
-                # off-diagonal parameter pairs appear once in our list but twice in the sum
-                H[m, n] = Ji[p, a] * Ji[q, b] + Ji[q, a] * Ji[p, b]
+                # off-diagonal physical pairs appear once in our list but
+                # twice in the sum, because d2R/dx_a dx_b is symmetric
+                H[m, n] = J[a, p] * J[b, q] + J[b, p] * J[a, q]
 
     # Correction for mapping curvature:
     # corr[n, pt] = sum over physical coords c: d2x_c/dxi_p dxi_q * dR_phys[c, pt]
