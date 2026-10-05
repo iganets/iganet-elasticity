@@ -146,6 +146,27 @@ def run(config_path: Path, out_path: Path, quiet: bool = False) -> None:
     num_patches = int(get_required(cfg, "multipatch.num_patches"))
     cube_size = float(get_optional(cfg, "multipatch.cube_size", 1.0))
 
+    # Optional per-patch material. Every patch starts from the two values above
+    # and is then overwritten by its entry, so a partial list is allowed. This
+    # is deliberately a separate list and not patches_3d, which would switch the
+    # boundary conditions from the global side scheme to the per-patch one.
+    entries = cfg.get("material", {}).get("patches")
+    if entries:
+        E = [E] * num_patches
+        nu = [nu] * num_patches
+        for entry in entries:
+            if "patch_id" not in entry:
+                raise SystemExit("material.patches entry needs a patch_id")
+            index = int(entry["patch_id"])
+            if not 0 <= index < num_patches:
+                raise SystemExit(
+                    f"material.patches patch_id {index} is outside "
+                    f"0..{num_patches - 1}")
+            if "young_modulus" in entry:
+                E[index] = float(entry["young_modulus"])
+            if "poisson_ratio" in entry:
+                nu[index] = float(entry["poisson_ratio"])
+
     bc, body_force = _load_bc(cfg)
 
     patches, meta = solve_elasticity_collocation_multipatch_chain_3d(
@@ -153,6 +174,7 @@ def run(config_path: Path, out_path: Path, quiet: bool = False) -> None:
         p=degree, q=degree, r=degree,
         mcp=ncp, ncp=ncp, lcp=ncp,
         E=E, nu=nu, bc=bc, body_force=body_force, cube_size=cube_size,
+        quiet=quiet,
     )
 
     if not quiet:
