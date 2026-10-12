@@ -72,7 +72,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG = REPO_ROOT / "src" / "examples3D" / "multiPatch" / "sim_config_3D_multi_patch_bone.json"
 DEFAULT_OUTPUT = REPO_ROOT / "results" / "result_collocation_reference_3D_multipatch_bone.json"
 
-MATCH_TOL = 1e-6          # same tolerance as the C++ multipatch code
+# Control points closer than this are treated as the same global unknown.
+# Keep in sync with MATCHING_TOLERANCE in the bone example (.cxx), otherwise the
+# reference and the trainer merge differently and solve different problems.
+MATCH_TOL = 5e-5
 DIRICHLET, FORCE, FREE = 3, 2, 1
 
 
