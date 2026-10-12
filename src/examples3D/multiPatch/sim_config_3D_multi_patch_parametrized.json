@@ -18,19 +18,28 @@
   },
   "simulation": {
     "max_epoch": 50,
-    "supervised_learning": false,
+    "run_collocation_reference": true,
+    "supervised_learning": true,
     "device": "cpu"
   },
   "material": {
     "young_modulus": 210.0,
     "poisson_ratio": 0.25,
     "patches": [
-      { "patch_id": 0, "young_modulus":  21, "poisson_ratio": 0.25 },
-      { "patch_id": 1, "young_modulus": 210, "poisson_ratio": 0.25 }
+      {
+        "patch_id": 0,
+        "young_modulus": 21,
+        "poisson_ratio": 0.25
+      },
+      {
+        "patch_id": 1,
+        "young_modulus": 210,
+        "poisson_ratio": 0.25
+      }
     ]
   },
   "geometry": {
-    "mode": "parametric",
+    "mode": "xml",
     "multipatch_xml_path": "filedata/five_cube_parametric.xml",
     "multipatch_id": 0
   },
@@ -41,25 +50,39 @@
   "solution_spline": {
     "nr_ctrl_pts": 6,
     "degree": 3
-  },  
-  "network": {
-    "hidden_layers": [4,4]
   },
-
+  "network": {
+    "hidden_layers": [
+      4,
+      4
+    ]
+  },
   "multipatch": {
     "learning_rate": 1,
     "supervised_weight": 100000.0,
-    "num_patches": 2,
+    "num_patches": 5,
     "cube_size": 1.0,
     "body_force": [
       0.0,
       0.0,
       0.0
     ],
-   "boundary_conditions": {
-    "diri_sides": [[1,0,0,0], [2,0.5,0,0]],
-    "force_sides": [], "tfbc_sides": [3,4,5,6]
-
-}
+    "boundary_conditions": {
+      "diri_sides": [
+        [
+          1,
+          0,
+          0,
+          0
+        ]
+      ],
+      "force_sides": [[3,0,10,0]],
+      "tfbc_sides": [
+        2,
+        4,
+        5,
+        6
+      ]
+    }
   }
 }
