@@ -37,6 +37,12 @@ using iganet_elasticity::utils::paths::repo_root_from_build_exe;
 namespace {
 
 // -----------------------------------------------------------------------------
+// Control points closer than this are merged into one global unknown.
+// Raise it for geometries whose interfaces do not meet exactly. Keep in sync
+// with MATCH_TOL in std_collocation_python/run_bone_reference_3d.py and with
+// matchingTolerance_ in lin_elasticity_multipatch_net.hpp.
+constexpr double MATCHING_TOLERANCE = 5e-5;
+
 // Helper functions for reading example-specific geometry settings
 // -----------------------------------------------------------------------------
 
@@ -509,7 +515,7 @@ int main(int argc, char** argv) {
         auto start = std::chrono::high_resolution_clock::now();
 
         multipatch_t geometry;
-        geometry.set_matching_tolerance(1e-6, 1e-6);
+        geometry.set_matching_tolerance(MATCHING_TOLERANCE, MATCHING_TOLERANCE);
         geometry.from_xml(xmlPath.string(), multipatchId);
         moveMultipatchToDevice(geometry, computeDevice);
         resolveAndValidatePatchConfigs(geometry, cfg);
