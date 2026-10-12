@@ -1,6 +1,7 @@
 {
   "simulation": {
-    "max_epoch": 1000,
+    "max_epoch": 5,
+    "run_collocation_reference": false,
     "supervised_learning": false,
     "min_loss": 1e-06,
     "device": "cpu"
@@ -10,12 +11,13 @@
     "poisson_ratio": 0.25
   },
   "geometry": {
-    "multipatch_xml_path": "filedata/bone_collocation_ready.xml",
+    "multipatch_xml_path": "filedata/boneWithImplantSolid_ready.xml",
     "multipatch_id": 0
   },
   "network": {
     "hidden_layers": [
-      4,4
+      4,
+      4
     ]
   },
   "multipatch": {
@@ -27,7 +29,359 @@
       0.0
     ]
   },
-  "patches_3d": [
+  "patches_3d_bonegenau": [
+    {
+      "patch_id": 116,
+      "boundary_conditions": {
+        "diri_sides": [
+          [
+            6,
+            0.0,
+            0.0,
+            0.0
+          ]
+        ]
+      }
+    },
+    {
+      "patch_id": 117,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          6
+        ]
+      }
+    },
+    {
+      "patch_id": 118,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          6
+        ]
+      }
+    },
+    {
+      "patch_id": 119,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          6
+        ]
+      }
+    },
+    {
+      "patch_id": 120,
+      "boundary_conditions": {
+        "diri_sides": [
+          [
+            6,
+            0.0,
+            0.0,
+            0.0
+          ]
+        ]
+      }
+    },
+    {
+      "patch_id": 134,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 135,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 136,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 137,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 151,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 152,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 153,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 154,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 168,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 169,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 170,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 171,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 197,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 198,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 199,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 200,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 206,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 207,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 208,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 209,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 210,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          6
+        ]
+      }
+    },
+    {
+      "patch_id": 211,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          6
+        ]
+      }
+    },
+    {
+      "patch_id": 212,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          6
+        ]
+      }
+    },
+    {
+      "patch_id": 213,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          6
+        ]
+      }
+    },
+    {
+      "patch_id": 214,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          6
+        ]
+      }
+    },
+    {
+      "patch_id": 215,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 216,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 217,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 218,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 219,
+      "boundary_conditions": {
+        "diri_sides": [
+          [
+            6,
+            0.0,
+            0.0,
+            0.0
+          ]
+        ],
+        "tfbc_sides": [
+          3,
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 220,
+      "boundary_conditions": {
+        "diri_sides": [
+          [
+            6,
+            0.0,
+            0.0,
+            0.0
+          ]
+        ],
+        "tfbc_sides": [
+          3,
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 221,
+      "boundary_conditions": {
+        "diri_sides": [
+          [
+            6,
+            0.0,
+            0.0,
+            0.0
+          ]
+        ],
+        "tfbc_sides": [
+          3,
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 222,
+      "boundary_conditions": {
+        "diri_sides": [
+          [
+            6,
+            0.0,
+            0.0,
+            0.0
+          ]
+        ],
+        "tfbc_sides": [
+          3,
+          4
+        ]
+      }
+    }
+  ],
+  "patches_3d_bonealt": [
     {
       "patch_id": 101,
       "boundary_conditions": {
@@ -182,5 +536,438 @@
         ]
       }
     }
+  ],
+
+
+
+
+
+
+
+  "patches_3d": [
+    {
+      "patch_id": 106,
+      "boundary_conditions": {
+        "diri_sides": [
+          [
+            6,
+            0.0,
+            0.0,
+            0.0
+          ]
+        ],
+        "tfbc_sides": [
+          2
+        ]
+      }
+    },
+    {
+      "patch_id": 107,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          1,
+          6
+        ]
+      }
+    },
+    {
+      "patch_id": 108,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4,
+          6
+        ]
+      }
+    },
+    {
+      "patch_id": 109,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          3,
+          6
+        ]
+      }
+    },
+    {
+      "patch_id": 110,
+      "boundary_conditions": {
+        "diri_sides": [
+          [
+            6,
+            0.0,
+            0.0,
+            0.0
+          ]
+        ]
+      }
+    },
+    {
+      "patch_id": 112,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 113,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 114,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 115,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 121,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          5
+        ]
+      }
+    },
+    {
+      "patch_id": 122,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          5
+        ]
+      }
+    },
+    {
+      "patch_id": 123,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          5
+        ]
+      }
+    },
+    {
+      "patch_id": 124,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          5
+        ]
+      }
+    },
+    {
+      "patch_id": 125,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          5
+        ]
+      }
+    },
+    {
+      "patch_id": 126,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          5
+        ]
+      }
+    },
+    {
+      "patch_id": 127,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          5
+        ]
+      }
+    },
+    {
+      "patch_id": 128,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          5
+        ]
+      }
+    },
+    {
+      "patch_id": 129,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4,
+          5
+        ]
+      }
+    },
+    {
+      "patch_id": 130,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4,
+          5
+        ]
+      }
+    },
+    {
+      "patch_id": 131,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4,
+          5
+        ]
+      }
+    },
+    {
+      "patch_id": 132,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4,
+          5
+        ]
+      }
+    },
+    {
+      "patch_id": 146,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 147,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 148,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 149,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 175,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 176,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 177,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 178,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 184,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 185,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 186,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 187,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 188,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          6
+        ]
+      }
+    },
+    {
+      "patch_id": 189,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          6
+        ]
+      }
+    },
+    {
+      "patch_id": 190,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          6
+        ]
+      }
+    },
+    {
+      "patch_id": 191,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          6
+        ]
+      }
+    },
+    {
+      "patch_id": 192,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          6
+        ]
+      }
+    },
+    {
+      "patch_id": 193,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 194,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 195,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 196,
+      "boundary_conditions": {
+        "tfbc_sides": [
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 197,
+      "boundary_conditions": {
+        "diri_sides": [
+          [
+            6,
+            0.0,
+            0.0,
+            0.0
+          ]
+        ],
+        "tfbc_sides": [
+          3,
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 198,
+      "boundary_conditions": {
+        "diri_sides": [
+          [
+            6,
+            0.0,
+            0.0,
+            0.0
+          ]
+        ],
+        "tfbc_sides": [
+          3,
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 199,
+      "boundary_conditions": {
+        "diri_sides": [
+          [
+            6,
+            0.0,
+            0.0,
+            0.0
+          ]
+        ],
+        "tfbc_sides": [
+          3,
+          4
+        ]
+      }
+    },
+    {
+      "patch_id": 200,
+      "boundary_conditions": {
+        "diri_sides": [
+          [
+            6,
+            0.0,
+            0.0,
+            0.0
+          ]
+        ],
+        "tfbc_sides": [
+          3,
+          4
+        ]
+      }
+    }
   ]
- }
+}
