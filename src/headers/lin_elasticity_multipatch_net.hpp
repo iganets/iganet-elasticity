@@ -1086,7 +1086,7 @@ private:
     std::vector<InterfaceCache> interfaceCaches_;
     std::array<double, 6> lastLossParts_{};
     torch::Tensor supervisedTarget_;
-    double matchingTolerance_{1e-6};
+    double matchingTolerance_{5e-5};   // see MATCHING_TOLERANCE in the examples
     std::vector<double> lambda_;
     std::vector<double> mu_;
 };
