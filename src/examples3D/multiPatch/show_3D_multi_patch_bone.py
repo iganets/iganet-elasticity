@@ -137,6 +137,44 @@ def print_patch_legend(patches_data):
         print(f"  {xml_id}: ({r:.2f}, {g:.2f}, {b:.2f})")
 
 
+# Camera for the 3D views. vedo's default looks straight down the z axis, and z
+# is the long axis of the bone, so the default shows it from above. Direction and
+# up vector below were read off an interactively aligned window: viewing along
+# -y with z upright, which gives the side view.
+#
+# Position and focal point are NOT fixed - they follow the geometry on screen.
+# A fixed focal point only fits the model it was measured on: the value taken
+# from the old bone (z = 132) sits in the upper third of the new one, which cut
+# off its lower half.
+VIEW_DIRECTION = [0.0, -1.0, 0.0]   # from the model towards the camera
+VIEW_UP = [0.0, 0.0, 1.0]
+VIEW_DISTANCE_FACTOR = 2.5          # times the largest extent of the model
+
+
+def camera_kwargs(*patch_groups) -> dict:
+    """Side view centred on whatever is shown, passed on to vedo."""
+    import numpy as _np
+
+    points = []
+    for group in patch_groups:
+        for patch in group:
+            cps = getattr(patch, "control_points", None)
+            if cps is not None:
+                points.append(_np.asarray(cps, dtype=float))
+    if not points:
+        return {}
+
+    cloud = _np.concatenate(points)
+    centre = (cloud.min(axis=0) + cloud.max(axis=0)) / 2.0
+    extent = float((cloud.max(axis=0) - cloud.min(axis=0)).max())
+    direction = _np.asarray(VIEW_DIRECTION, dtype=float)
+    direction /= _np.linalg.norm(direction)
+    position = centre + direction * VIEW_DISTANCE_FACTOR * extent
+    return {"cam": {"position": position.tolist(),
+                    "focal_point": centre.tolist(),
+                    "viewup": list(VIEW_UP)}}
+
+
 def derive_loss_plot_path(output_path: Path) -> Path:
     return output_path.with_name(output_path.stem + "_loss" + output_path.suffix)
 
@@ -243,7 +281,8 @@ def render_comparison(reference_path: Path, trained_path: Path, output_path: Pat
         output_path = figure_path(trained_path, "ansicht")
         output_path.parent.mkdir(parents=True, exist_ok=True)
         splinepy.show([*reference_patches], [*trained_patches],
-                      offscreen=True, interactive=False, close=True)
+                      offscreen=True, interactive=False, close=True,
+                      **camera_kwargs(reference_patches, trained_patches))
         try:
             import vedo
 
@@ -275,7 +314,8 @@ def render_comparison(reference_path: Path, trained_path: Path, output_path: Pat
         return
 
     splinepy.show([*reference_patches], [*trained_patches],
-                  control_mesh=False, control_point_ids=False)
+                  control_mesh=False, control_point_ids=False,
+                  **camera_kwargs(reference_patches, trained_patches))
     plot_loss_history(loss_history, enabled=plot_loss,
                       max_epoch=trained_result.get("max_epoch"),
                       output_path=loss_output_path, interactive=True,
@@ -305,6 +345,7 @@ def render_result(result_path: Path, output_path: Path, deformed_only: bool, sho
                 offscreen=True,
                 interactive=False,
                 close=True,
+                **camera_kwargs(deformed),
             )
         else:
             splinepy.show(
@@ -313,6 +354,7 @@ def render_result(result_path: Path, output_path: Path, deformed_only: bool, sho
                 offscreen=True,
                 interactive=False,
                 close=True,
+                **camera_kwargs(reference, deformed),
             )
 
         try:
@@ -342,6 +384,7 @@ def render_result(result_path: Path, output_path: Path, deformed_only: bool, sho
             [*deformed],
             control_mesh=False,
             control_point_ids=False,
+            **camera_kwargs(deformed),
         )
     else:
         splinepy.show(
@@ -349,6 +392,7 @@ def render_result(result_path: Path, output_path: Path, deformed_only: bool, sho
             [*deformed],
             control_mesh=False,
             control_point_ids=False,
+            **camera_kwargs(reference, deformed),
         )
 
     plot_loss_history(loss_history, enabled=plot_loss, max_epoch=result.get("max_epoch"), output_path=loss_output_path, interactive=True)
