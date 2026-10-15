@@ -202,7 +202,8 @@ def load_boundary_conditions(cfg: dict, first_id: int, n_patches: int):
     return table
 
 
-def solve(xml_path: Path, cfg: dict, quiet: bool = False, return_system: bool = False):
+def solve(xml_path: Path, cfg: dict, quiet: bool = False, return_system: bool = False,
+          info: dict | None = None):
     multipatch, _ = splinepy.io.gismo.load(str(xml_path))
     patches = [Patch(s) for s in multipatch.patches]
     n_patches = len(patches)
@@ -223,10 +224,46 @@ def solve(xml_path: Path, cfg: dict, quiet: bool = False, return_system: bool = 
     import xml.etree.ElementTree as ET
     first_id = int(ET.parse(xml_path).getroot().find(".//MultiPatch/patches").text.split()[0])
 
+    # Material per patch. Every patch starts from the global values and is then
+    # overwritten by its material.patches entry, addressed by XML patch id just
+    # like patches_3d. mu and lam are therefore lists indexed by patch, not
+    # scalars: at an interface between two materials each side contributes its
+    # own stress, which is what holds the force balance there.
     E = float(get_required(cfg, "material.young_modulus"))
     nu = float(get_required(cfg, "material.poisson_ratio"))
-    mu = E / (2.0 * (1.0 + nu))
-    lam = E * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
+    E_patch = [E] * n_patches
+    nu_patch = [nu] * n_patches
+    for entry in get_optional(cfg, "material.patches", []):
+        if "patch_id" not in entry:
+            raise SystemExit("material.patches entry needs a patch_id")
+        index = int(entry["patch_id"]) - first_id
+        if not 0 <= index < n_patches:
+            raise SystemExit(
+                f"material.patches patch_id {entry['patch_id']} is outside the "
+                f"XML range {first_id}..{first_id + n_patches - 1}")
+        if "young_modulus" in entry:
+            E_patch[index] = float(entry["young_modulus"])
+        if "poisson_ratio" in entry:
+            nu_patch[index] = float(entry["poisson_ratio"])
+    mu = [e / (2.0 * (1.0 + n)) for e, n in zip(E_patch, nu_patch)]
+    lam = [e * n / ((1.0 + n) * (1.0 - 2.0 * n)) for e, n in zip(E_patch, nu_patch)]
+    # P-wave modulus, the stiffness measure that decides which patch owns a
+    # point claimed by two of them (see the sort below).
+    stiffness = [l + 2.0 * m for l, m in zip(lam, mu)]
+    deviating = [i for i in range(n_patches)
+                 if E_patch[i] != E or nu_patch[i] != nu]
+    if info is not None:
+        info["patch_materials"] = [
+            {"index": i, "xml_id": first_id + i,
+             "young_modulus": E_patch[i], "poisson_ratio": nu_patch[i]}
+            for i in range(n_patches)]
+        info["young_modulus"] = E
+        info["poisson_ratio"] = nu
+    if deviating and not quiet:
+        print(f"Material pro Patch: {len(deviating)} von {n_patches} Patches "
+              f"abweichend von E={E}, nu={nu}: "
+              + ", ".join(f"xml {first_id + i}: E={E_patch[i]}, nu={nu_patch[i]}"
+                          for i in deviating))
     body = np.array(get_optional(cfg, "multipatch.body_force", [0.0, 0.0, 0.0]), dtype=float)
 
     bc_table = load_boundary_conditions(cfg, first_id, n_patches)
@@ -270,7 +307,8 @@ def solve(xml_path: Path, cfg: dict, quiet: bool = False, return_system: bool = 
     def traction_block(pi, i, j, k, side):
         patch = patches[pi]
         _, dN, _ = patch.derivatives(i, j, k)
-        return traction_local_block(dN, patch.outward_normal(side, i, j, k), mu, lam)
+        return traction_local_block(dN, patch.outward_normal(side, i, j, k),
+                                    mu[pi], lam[pi])
 
     for gid, places in incidences.items():
         prescribed, on_interface = [], []
@@ -280,7 +318,13 @@ def solve(xml_path: Path, cfg: dict, quiet: bool = False, return_system: bool = 
                     on_interface.append((pi, i, j, k, side))
                 else:
                     priority, target = bc_table.get((pi, side), (FREE, np.zeros(3)))
-                    prescribed.append((-priority, pi, side, i, j, k, target))
+                    prescribed.append(
+                        (-priority, -stiffness[pi], pi, side, i, j, k, target))
+        # Sort key: priority first, then the STIFFER patch, then the lower patch
+        # and side. The stiffness term matters only where two patches of
+        # different material claim the same point; it mirrors claim_wins() in
+        # lin_elasticity_multipatch_net.hpp, so the trainer and this reference
+        # resolve such a point the same way and stay comparable.
         prescribed.sort()
 
         # A prescribed displacement settles the node outright: where the
@@ -288,7 +332,7 @@ def solve(xml_path: Path, cfg: dict, quiet: bool = False, return_system: bool = 
         # eliminated rather than fitted, so it stays exact.
         dirichlet = [c for c in prescribed if -c[0] == DIRICHLET]
         if dirichlet:
-            _, pi, side, i, j, k, target = dirichlet[0]
+            _, _, pi, side, i, j, k, target = dirichlet[0]
             base = 3 * gids[pi][patches[pi].local_index(i, j, k)]
             fixed[base:base + 3] = True
             fixed_value[base:base + 3] = target
@@ -300,7 +344,7 @@ def solve(xml_path: Path, cfg: dict, quiet: bool = False, return_system: bool = 
         # traction-free, ties by the lower patch and side. Keeping all of them
         # instead was measured and changes the solution by 0.5 %, so the
         # simpler rule stays.
-        for _, pi, side, i, j, k, target in prescribed[:1]:
+        for _, _, pi, side, i, j, k, target in prescribed[:1]:
             equation([(pi, traction_block(pi, i, j, k, side))], target)
             counts["traction"] += 1
 
@@ -319,7 +363,7 @@ def solve(xml_path: Path, cfg: dict, quiet: bool = False, return_system: bool = 
             pi, i, j, k = places[0]
             patch = patches[pi]
             _, dN, ddN = patch.derivatives(i, j, k)
-            equation([(pi, interior_pde_local_block(dN, ddN, mu, lam))], -body)
+            equation([(pi, interior_pde_local_block(dN, ddN, mu[pi], lam[pi]))], -body)
             counts["interior"] += 1
 
     log("Gleichungen: " + ", ".join(f"{k} {v}" for k, v in counts.items())
@@ -376,7 +420,8 @@ def solve(xml_path: Path, cfg: dict, quiet: bool = False, return_system: bool = 
     return patches, displacements, multipatch
 
 
-def write_json(out_path: Path, patches, displacements, xml_path: Path, quiet: bool = False):
+def write_json(out_path: Path, patches, displacements, xml_path: Path, quiet: bool = False,
+               info: dict | None = None):
     entries = []
     for index, (patch, disp) in enumerate(zip(patches, displacements)):
         entries.append({
@@ -398,6 +443,11 @@ def write_json(out_path: Path, patches, displacements, xml_path: Path, quiet: bo
         "geometry_xml": str(xml_path),
         "patches": entries,
     }
+    # Material used, so a comparison against the trained result can verify that
+    # both solved the SAME problem. The geometry cross-check in the examples
+    # cannot catch a material mismatch - the geometry is identical either way.
+    if info:
+        summary.update(info)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     existing = {}
@@ -434,12 +484,13 @@ def main() -> None:
     if not quiet:
         print(f"config:   {config_path}")
         print(f"geometry: {xml_path}")
-    patches, displacements, _ = solve(xml_path, cfg, quiet=quiet)
+    info: dict = {}
+    patches, displacements, _ = solve(xml_path, cfg, quiet=quiet, info=info)
     if not quiet:
         for index, disp in enumerate(displacements):
             if index < 3 or index == len(displacements) - 1:
                 print(f"  Patch {index}: |u| max {np.abs(disp).max():.6e}")
-    write_json(out_path, patches, displacements, xml_path, quiet=quiet)
+    write_json(out_path, patches, displacements, xml_path, quiet=quiet, info=info)
 
 
 if __name__ == "__main__":
