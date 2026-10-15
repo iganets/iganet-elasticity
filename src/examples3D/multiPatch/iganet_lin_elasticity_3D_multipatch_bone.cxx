@@ -236,6 +236,60 @@ bool isOuterBoundary(const MultiPatch& geometry, std::size_t patchIndex, int sid
         });
 }
 
+/// @brief Fills cfg.patchYoungModulus / patchPoissonRatio from material.patches.
+///
+/// patch_id is the XML patch id, the same addressing patches_3d uses, so the
+/// implant and the bone are named the same way everywhere in this config. (The
+/// parametric example keys the same field by the 0-based patch index, because
+/// its patches are built procedurally and have no XML ids.) Every patch starts
+/// from material.young_modulus / poisson_ratio and is then overwritten by its
+/// entry, so a partial list is allowed. An unknown patch_id raises rather than
+/// being skipped - a typo there would silently simulate the wrong material.
+template <typename MultiPatch>
+void resolvePatchMaterials(const MultiPatch& geometry, const nlohmann::json& j,
+                           MultipatchConfig& cfg) {
+    const auto npatches = geometry.npatches();
+    cfg.patchYoungModulus.assign(npatches, cfg.youngModulus);
+    cfg.patchPoissonRatio.assign(npatches, cfg.poissonRatio);
+
+    if (!j.contains("material") || !j["material"].contains("patches")) {
+        return;
+    }
+    for (const auto& entry : j["material"]["patches"]) {
+        if (!entry.contains("patch_id")) {
+            throw std::runtime_error("material.patches entry needs a patch_id");
+        }
+        const auto patchIndex = resolvePatchIndex(geometry, entry["patch_id"].get<int>());
+        if (entry.contains("young_modulus")) {
+            cfg.patchYoungModulus[patchIndex] = entry["young_modulus"].get<double>();
+        }
+        if (entry.contains("poisson_ratio")) {
+            cfg.patchPoissonRatio[patchIndex] = entry["poisson_ratio"].get<double>();
+        }
+    }
+
+    // Report what deviates from the global material, so a run with a material
+    // jump is visible in the log without opening the result file.
+    std::size_t deviating = 0;
+    for (std::size_t p = 0; p < npatches; ++p) {
+        if (cfg.patchYoungModulus[p] != cfg.youngModulus ||
+            cfg.patchPoissonRatio[p] != cfg.poissonRatio) {
+            if (deviating == 0) {
+                std::cout << "per-patch material (deviating from E="
+                          << cfg.youngModulus << ", nu=" << cfg.poissonRatio << "):";
+            }
+            std::cout << " [xml " << geometry.patch_xml_id(p)
+                      << ": E=" << cfg.patchYoungModulus[p]
+                      << ", nu=" << cfg.patchPoissonRatio[p] << "]";
+            ++deviating;
+        }
+    }
+    if (deviating > 0) {
+        std::cout << "\n" << deviating << " of " << npatches
+                  << " patches use their own material\n";
+    }
+}
+
 template <typename MultiPatch>
 void resolveAndValidatePatchConfigs(const MultiPatch& geometry, MultipatchConfig& cfg) {
     for (auto& patchCfg : cfg.patchConfigs) {
@@ -519,6 +573,7 @@ int main(int argc, char** argv) {
         geometry.from_xml(xmlPath.string(), multipatchId);
         moveMultipatchToDevice(geometry, computeDevice);
         resolveAndValidatePatchConfigs(geometry, cfg);
+        resolvePatchMaterials(geometry, j, cfg);
         if (cfg.patchConfigs.empty()) {
             throw std::runtime_error("No patches_3d boundary conditions configured");
         }
@@ -610,13 +665,34 @@ int main(int argc, char** argv) {
         summary["boundary_greville_points"] = boundaryGreville;
         summary["dirichlet_boundary_sets"] = countDirichletBoundarySets(cfg);
         summary["force_boundary_sets"] = countForceBoundarySets(cfg);
+        // The material actually used, per patch and in internal patch order
+        // next to its XML id, so a run with a material jump stays traceable
+        // from its result file alone.
+        summary["young_modulus"] = cfg.youngModulus;
+        summary["poisson_ratio"] = cfg.poissonRatio;
+        {
+            nlohmann::json materials = nlohmann::json::array();
+            for (std::size_t p = 0; p < geometryOut.npatches(); ++p) {
+                materials.push_back({{"index", p},
+                                     {"xml_id", geometryOut.patch_xml_id(p)},
+                                     {"young_modulus", cfg.patchYoungModulus[p]},
+                                     {"poisson_ratio", cfg.patchPoissonRatio[p]}});
+            }
+            summary["patch_materials"] = materials;
+        }
         summary["max_epoch"] = cfg.maxEpoch;
+        // max_epoch is the configured limit; epochs_run is what actually ran,
+        // which is smaller whenever min_loss stopped the training early. The
+        // plot scripts need loss_history_epochs to place the curve on a true
+        // epoch axis, because the optimizer records several losses per epoch.
+        summary["epochs_run"] = net.epochs_run();
         summary["learning_rate"] = cfg.learningRate;
         summary["strong_dirichlet_fixed_dofs"] = constraints.nfixed();
         summary["strong_dirichlet_free_dofs"] = constraints.nfree();
         summary["loss_initial"] = lossHistory.empty() ? 0.0 : lossHistory.front();
         summary["loss_final"] = lossHistory.empty() ? 0.0 : lossHistory.back();
         summary["loss_history"] = lossHistory;
+        summary["loss_history_epochs"] = net.epoch_history();
         summary["geometry_control_points"] = tensor3BlocksToJson(geometryTensor);
         summary["displacements"] = tensor3BlocksToJson(displacementTensor);
         summary["deformed_control_points"] =
