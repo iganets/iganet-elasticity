@@ -722,9 +722,15 @@ int main() {
         summary["strong_dirichlet_fixed_dofs"] = constraints.nfixed();
         summary["strong_dirichlet_free_dofs"] = constraints.nfree();
         summary["max_epoch"] = cfg.maxEpoch;
+        // max_epoch is the configured limit; epochs_run is what actually ran,
+        // which is smaller whenever min_loss stopped the training early. The
+        // plot scripts need loss_history_epochs to place the curve on a true
+        // epoch axis, because the optimizer records several losses per epoch.
+        summary["epochs_run"] = net.epochs_run();
         summary["loss_initial"] = history.empty() ? 0.0 : history.front();
         summary["loss_final"] = history.empty() ? 0.0 : history.back();
         summary["loss_history"] = history;
+        summary["loss_history_epochs"] = net.epoch_history();
         summary["geometry_control_points"] = tensor3BlocksToJson(geometryTensor);
         summary["displacements"] = tensor3BlocksToJson(displacementTensor);
         summary["deformed_control_points"] =

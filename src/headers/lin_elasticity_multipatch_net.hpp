@@ -271,6 +271,11 @@ public:
             parts.interfaceTraction.detach().template item<double>(),
             parts.supervised.detach().template item<double>()};
         history_.push_back(lastLossParts_[0]);
+        // The optimizer evaluates the loss several times per epoch, so the
+        // history is longer than the epoch count. Recording the epoch of every
+        // entry lets the plot scripts put the curve on a true epoch axis even
+        // when min_loss stops training before max_epoch.
+        epochHistory_.push_back(epoch);
         std::cout << "epoch " << std::setw(6) << epoch
                   << " | total " << std::setw(14) << lastLossParts_[0]
                   << " | coll " << std::setw(14) << lastLossParts_[1]
@@ -304,6 +309,17 @@ public:
 
     const auto& history() const noexcept {
         return history_;
+    }
+
+    /// @brief Epoch index of every entry in history(), same length.
+    const auto& epoch_history() const noexcept {
+        return epochHistory_;
+    }
+
+    /// @brief Number of epochs actually run, which is below max_epoch whenever
+    /// min_loss stopped the training early.
+    int64_t epochs_run() const noexcept {
+        return epochHistory_.empty() ? 0 : epochHistory_.back() + 1;
     }
 
     const auto& geometry() const {
@@ -1081,6 +1097,7 @@ private:
     config_t cfg_;
     torch::TensorOptions tensorOptions_;
     std::vector<double> history_;
+    std::vector<int64_t> epochHistory_;
     std::vector<PatchResidualCache> patchResidualCaches_;
     std::vector<BoundaryTractionCache> tractionCaches_;
     std::vector<InterfaceCache> interfaceCaches_;
