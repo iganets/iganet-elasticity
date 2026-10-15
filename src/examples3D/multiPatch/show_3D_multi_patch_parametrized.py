@@ -195,12 +195,45 @@ def figure_path(result_path: Path, kind: str) -> Path:
     return PLOT_DIR / f"parametric_{run_id_of(result_path)}_{kind}.png"
 
 
-def plot_loss_history(loss_history, output_path: Path = None, interactive: bool = True, title: str = "Training Loss", max_epoch: int = None, enabled: bool = True):
+def _loss_axis(loss_history, epoch_history, max_epoch):
+    """x values, axis label and a title note for the loss curve.
+
+    With epoch_history (the result's loss_history_epochs) the evaluations of
+    epoch e are spread across the interval (e, e+1], so the axis is a true,
+    monotone epoch axis and no assumption is made about how many evaluations an
+    epoch contains. Without it, the raw evaluation index is plotted and the
+    label says so - the axis is NOT stretched to max_epoch, which used to
+    mislabel every run that min_loss stopped early."""
+    if epoch_history and len(epoch_history) == len(loss_history):
+        per_epoch = {}
+        for e in epoch_history:
+            per_epoch[e] = per_epoch.get(e, 0) + 1
+        seen = {}
+        x = []
+        for e in epoch_history:
+            seen[e] = seen.get(e, 0) + 1
+            x.append(e + seen[e] / per_epoch[e])
+        epochs_run = epoch_history[-1] + 1
+        note = f"{epochs_run} epochs run"
+        if max_epoch and epochs_run < max_epoch:
+            note += f" of max_epoch {max_epoch}, stopped early by min_loss"
+        return x, "Epoch", note
+
+    return (range(1, len(loss_history) + 1), "Loss evaluation",
+            "no loss_history_epochs in this result - "
+            "x axis counts loss evaluations, not epochs")
+
+
+def plot_loss_history(loss_history, output_path: Path = None, interactive: bool = True, title: str = "Training Loss", max_epoch: int = None, enabled: bool = True, epoch_history=None):
     """Plot the per-epoch training loss in its own window, opened after the
     3D solution view is closed (or saved to a PNG when non-interactive).
     Does nothing if the result has no loss_history, e.g. the classical
     collocation reference solution, which is solved directly rather than
-    trained and therefore has no per-epoch loss curve."""
+    trained and therefore has no per-epoch loss curve.
+
+    epoch_history is the result's loss_history_epochs: the epoch index of every
+    recorded loss. It is what puts the curve on a true epoch axis; max_epoch is
+    only used to note in the title that min_loss stopped the run early."""
     if not enabled:
         return
     if not loss_history:
@@ -215,16 +248,15 @@ def plot_loss_history(loss_history, output_path: Path = None, interactive: bool 
         return
 
     # The optimizer (LBFGS) evaluates the loss several times per epoch and
-    # every evaluation is recorded, so the history is longer than max_epoch.
-    # If the result stores max_epoch, plot against real epochs; otherwise
-    # label the axis honestly as loss evaluations.
-    if max_epoch:
-        evals_per_epoch = len(loss_history) / max_epoch
-        epochs = [(i + 1) / evals_per_epoch for i in range(len(loss_history))]
-        xlabel = "Epoch"
-    else:
-        epochs = range(1, len(loss_history) + 1)
-        xlabel = "Epoch"
+    # every evaluation is recorded, so the history is longer than the number of
+    # epochs. loss_history_epochs carries the epoch of each entry, which is the
+    # only way to get the axis right: deriving it as len(loss_history) /
+    # max_epoch assumes the full epoch budget was used and stretches the axis
+    # to max_epoch whenever min_loss stopped the run early.
+    epochs, xlabel, note = _loss_axis(loss_history, epoch_history, max_epoch)
+    if note:
+        # On the console, not in the figure: the plot carries its title only.
+        print(f"Loss plot: {note}")
     fig, ax = plt.subplots(num=title)
     ax.plot(epochs, loss_history)
     ax.set_xlabel(xlabel)
@@ -336,7 +368,8 @@ def render_comparison(
 
     if not interactive:
         print("Skipping interactive window (--no-interactive).")
-        plot_loss_history(loss_history, enabled=plot_loss, max_epoch=trained_result.get("max_epoch"), output_path=loss_output_path, interactive=False,
+        plot_loss_history(loss_history, enabled=plot_loss, max_epoch=trained_result.get("max_epoch"),
+                      epoch_history=trained_result.get("loss_history_epochs"), output_path=loss_output_path, interactive=False,
                           title="Trend in Training Loss")
         return
 
@@ -347,7 +380,8 @@ def render_comparison(
         control_point_ids=False,
     )
 
-    plot_loss_history(loss_history, enabled=plot_loss, max_epoch=trained_result.get("max_epoch"), output_path=loss_output_path, interactive=True,
+    plot_loss_history(loss_history, enabled=plot_loss, max_epoch=trained_result.get("max_epoch"),
+                      epoch_history=trained_result.get("loss_history_epochs"), output_path=loss_output_path, interactive=True,
                       title="Trend in Training Loss")
 
 
@@ -412,7 +446,7 @@ def render_result(
 
     if not interactive:
         print("Skipping interactive window (--no-interactive).")
-        plot_loss_history(loss_history, enabled=plot_loss, max_epoch=result.get("max_epoch"), output_path=loss_output_path, interactive=False)
+        plot_loss_history(loss_history, enabled=plot_loss, max_epoch=result.get("max_epoch"), epoch_history=result.get("loss_history_epochs"), output_path=loss_output_path, interactive=False)
         return
 
     if deformed_only:
@@ -429,7 +463,7 @@ def render_result(
             control_point_ids=False,
         )
 
-    plot_loss_history(loss_history, enabled=plot_loss, max_epoch=result.get("max_epoch"), output_path=loss_output_path, interactive=True)
+    plot_loss_history(loss_history, enabled=plot_loss, max_epoch=result.get("max_epoch"), epoch_history=result.get("loss_history_epochs"), output_path=loss_output_path, interactive=True)
 
 
 def main():
