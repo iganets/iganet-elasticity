@@ -6,8 +6,11 @@
 #include <algorithm>
 #include <any>
 #include <array>
+#include <chrono>
+#include <cmath>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -78,7 +81,14 @@ struct MultipatchElasticityConfig {
     int lbfgsHistorySize{50};
     real_t collocationWeight{1.0};
     bool rowScaling{true};
+    /// Only used by the patch-wise evaluation (linearOperator = false). The
+    /// linear operator computes the row norms exactly and needs no probes.
     int rowScalingProbes{64};
+    /// Evaluates the residual as one sparse matrix-vector product r = A u + b,
+    /// assembled once before training, instead of patch by patch in every loss
+    /// evaluation. Same loss to round-off, see assemble_linear_operator().
+    /// false restores the patch-wise evaluation.
+    bool linearOperator{true};
     /// Adds ||u - u_reference||^2 to the loss, weighted by supervisedWeight.
     /// The target comes from the collocation reference, so it only makes sense
     /// once that reference describes the same config - see the examples, which
@@ -96,6 +106,30 @@ struct MultipatchElasticityConfig {
 };
 
 namespace iganet_elasticity::multipatch {
+
+/// @brief y = A x for a constant sparse matrix A, differentiable in x.
+///
+/// The backward pass is the product with the transpose, which is assembled
+/// once as its own CSR matrix. Autograd then records a single node per loss
+/// term instead of the thousands of small tensor operations the patch-wise
+/// evaluation produces.
+struct SparseMatVec : public torch::autograd::Function<SparseMatVec> {
+    static torch::Tensor forward(torch::autograd::AutogradContext* ctx,
+                                 const torch::Tensor& x,
+                                 const torch::Tensor& A,
+                                 const torch::Tensor& AT) {
+        ctx->saved_data["AT"] = AT;
+        return A.matmul(x.unsqueeze(1)).squeeze(1);
+    }
+
+    static torch::autograd::variable_list backward(
+        torch::autograd::AutogradContext* ctx,
+        torch::autograd::variable_list gradOutput) {
+        const auto AT = ctx->saved_data["AT"].toTensor();
+        return {AT.matmul(gradOutput[0].unsqueeze(1)).squeeze(1),
+                torch::Tensor(), torch::Tensor()};
+    }
+};
 
 template <typename EvalXi0, typename EvalXi1, typename EvalXi2>
 inline torch::Tensor stack_parametric_jacobian(const EvalXi0& dx,
@@ -253,7 +287,11 @@ public:
         }
 
         prepare_caches();
-        compute_row_scaling();
+        if (cfg_.linearOperator) {
+            assemble_linear_operator();
+        } else {
+            compute_row_scaling();
+        }
     }
 
     bool epoch(int64_t) override {
@@ -979,6 +1017,28 @@ private:
     }
 
     LossParts loss_parts(const torch::Tensor& displacementTensor) const {
+        if (cfg_.linearOperator && linearReady_) {
+            return loss_parts_linear(displacementTensor);
+        }
+        return loss_parts_patchwise(displacementTensor);
+    }
+
+    /// @brief Supervised term: fit the reference solution directly. Unlike the
+    /// physics terms it weights every direction equally, which is why it can
+    /// reach the soft modes the residual is nearly blind to. It is ADDED to
+    /// the physics loss, not a replacement for it.
+    torch::Tensor supervised_loss(const torch::Tensor& displacementTensor) const {
+        if (cfg_.supervisedLearning && supervisedTarget_.defined()) {
+            return cfg_.supervisedWeight *
+                   torch::mse_loss(displacementTensor, supervisedTarget_);
+        }
+        return torch::zeros({}, tensorOptions_);
+    }
+
+    /// @brief The loss evaluated patch by patch, point set by point set. Used
+    /// when linearOperator is off, and once at start-up to verify the linear
+    /// operator against it.
+    LossParts loss_parts_patchwise(const torch::Tensor& displacementTensor) const {
         auto collocationLoss = torch::zeros({}, tensorOptions_);
         auto tractionLoss = torch::zeros({}, tensorOptions_);
         auto tfbcLoss = torch::zeros({}, tensorOptions_);
@@ -1024,16 +1084,392 @@ private:
                             torch::mse_loss(residual, torch::zeros_like(residual));
         }
 
-        // Supervised term: fit the reference solution directly. Unlike the
-        // physics terms it weights every direction equally, which is why it can
-        // reach the soft modes the residual is nearly blind to. It is ADDED to
-        // the physics loss, not a replacement for it.
-        auto supervisedLoss = torch::zeros({}, tensorOptions_);
-        if (cfg_.supervisedLearning && supervisedTarget_.defined()) {
-            supervisedLoss = cfg_.supervisedWeight *
-                             torch::mse_loss(displacementTensor, supervisedTarget_);
+        const auto supervisedLoss = supervised_loss(displacementTensor);
+
+        return {
+            cfg_.collocationWeight * collocationLoss + tractionLoss + tfbcLoss +
+                interfaceLoss + supervisedLoss,
+            collocationLoss,
+            tractionLoss,
+            tfbcLoss,
+            interfaceLoss,
+            supervisedLoss};
+    }
+
+    // -------------------------------------------------------------------------
+    // Linear operator
+    //
+    // Every residual of the loss - equilibrium, prescribed and zero traction,
+    // interface balance - is linear in the global displacement coefficients u:
+    //
+    //     r = A u + b,
+    //
+    // with A depending on the geometry, the basis and the material only, and b
+    // holding the body force and the prescribed tractions. The patch-wise
+    // evaluation rebuilds A u from scratch in every loss evaluation: it cuts the
+    // patch coefficients out of u, evaluates three first and six second
+    // derivatives at every point set and maps them to physical space - several
+    // thousand small tensor operations whose backward pass dominated the run
+    // time (about 50 s per loss evaluation on the bone with implant).
+    //
+    // Here A is assembled once, row-scaled, as a sparse matrix per loss term.
+    // A loss evaluation is then one sparse product per term, and its gradient
+    // one product with the transpose (SparseMatVec).
+    //
+    // Assembly. A prepared point set stores, per point q and per basis function
+    // k with support there, the parametric basis derivatives B_d[k,q] and
+    // B_de[k,q] and the local coefficient index. With the inverse Jacobian
+    // invJ[q,d,j] = dxi_d/dx_j and the geometry Hessians hessG[l][q,d,e] =
+    // d2x_l/dxi_d dxi_e the physical derivatives of basis function k are
+    //
+    //     N_j[k,q]  = sum_d B_d[k,q] invJ[q,d,j]
+    //     M_ij[k,q] = sum_de invJ[q,d,i] (B_de[k,q] - sum_l N_l[k,q] hessG[l][q,d,e]) invJ[q,e,j]
+    //
+    // exactly the transformation strong_form_residual() applies to u. The
+    // equilibrium row i and the traction row i then carry, for displacement
+    // component c,
+    //
+    //     div sigma:  mu delta_ic sum_j M_jj + (lambda + mu) M_ic
+    //     sigma n:    mu delta_ic (N . n) + mu N_i n_c + lambda n_i N_c
+    //
+    // in column c * ndofs + (global id of k). An interface row adds the
+    // traction rows of both patches; columns shared by them are summed.
+    //
+    // Row scaling. The patch-wise path estimates the norm of every row of A
+    // (restricted to the free coefficients) from 64 random probes. With A at
+    // hand the norm is computed exactly; scales are normalised to geometric
+    // mean one as before.
+    //
+    // Check. After assembly the loss is evaluated both ways for a random u,
+    // with the same row scales. The run stops if they differ by more than
+    // 1e-6 relative; the deviation is printed.
+    // -------------------------------------------------------------------------
+
+    /// @brief Rows of one point set in COO form: row = 3 * point + component.
+    struct LinearRows {
+        torch::Tensor rows;
+        torch::Tensor cols;
+        torch::Tensor vals;
+        torch::Tensor b;
+        int64_t nrows{0};
+    };
+
+    /// @brief Physical first (N, 3 x nb x n) and, if hessG is given, second
+    /// (M, 3 x 3 x nb x n) derivatives of the basis functions at a point set,
+    /// with the global DOF id of every basis function (cols, nb x n).
+    struct PhysicalBasis {
+        torch::Tensor cols;
+        torch::Tensor N;
+        torch::Tensor M;
+    };
+
+    PhysicalBasis physical_basis(std::size_t patchIndex, const PreparedPointSet& ev,
+                                 const torch::Tensor& invJ,
+                                 const std::array<torch::Tensor, 3>* hessG) const {
+        const int64_t n = ev.numeval;
+        const auto local = ev.coeff_indices.flatten().to(torch::kInt64).view({-1, n});
+        const auto& ids = displacement().dof_map().local_to_global[patchIndex];
+        const auto globalIds =
+            torch::tensor(ids, torch::TensorOptions().dtype(torch::kInt64))
+                .to(tensorOptions_.device());
+
+        PhysicalBasis result;
+        result.cols = globalIds.index_select(0, local.flatten()).view_as(local);
+
+        const auto basis = [&](iganet::deriv d) {
+            return ev.basfunc(d).to(tensorOptions_).reshape({-1, n});
+        };
+        const auto Bd = torch::stack({basis(iganet::deriv::dx), basis(iganet::deriv::dy),
+                                      basis(iganet::deriv::dz)});
+        result.N = torch::einsum("dkq,qdj->jkq", {Bd, invJ});
+
+        if (hessG != nullptr) {
+            const auto bxx = basis(iganet::deriv::dx ^ 2);
+            const auto bxy = basis(iganet::deriv::dx + iganet::deriv::dy);
+            const auto bxz = basis(iganet::deriv::dx + iganet::deriv::dz);
+            const auto byy = basis(iganet::deriv::dy ^ 2);
+            const auto byz = basis(iganet::deriv::dy + iganet::deriv::dz);
+            const auto bzz = basis(iganet::deriv::dz ^ 2);
+            const auto Bde = torch::stack({torch::stack({bxx, bxy, bxz}),
+                                           torch::stack({bxy, byy, byz}),
+                                           torch::stack({bxz, byz, bzz})});
+            const auto H = torch::stack({(*hessG)[0], (*hessG)[1], (*hessG)[2]});
+            const auto corrected = Bde - torch::einsum("lkq,lqde->dekq", {result.N, H});
+            result.M = torch::einsum("qdi,dekq,qej->ijkq", {invJ, corrected, invJ});
+        }
+        return result;
+    }
+
+    /// @brief Appends the entries of row block i, displacement component c.
+    void append_entries(LinearRows& out, const PhysicalBasis& basis, int i, int c,
+                        const torch::Tensor& vals, int64_t nscalar) const {
+        const int64_t n = vals.size(1);
+        const auto rows = (3 * torch::arange(n, basis.cols.options()) + i)
+                              .view({1, n}).expand_as(basis.cols);
+        out.rows = torch::cat({out.rows, rows.flatten()});
+        out.cols = torch::cat({out.cols, (basis.cols + c * nscalar).flatten()});
+        out.vals = torch::cat({out.vals, vals.flatten()});
+    }
+
+    LinearRows empty_rows(int64_t n) const {
+        const auto idx = torch::TensorOptions().dtype(torch::kInt64).device(tensorOptions_.device());
+        return {torch::empty({0}, idx), torch::empty({0}, idx),
+                torch::empty({0}, tensorOptions_), torch::zeros({3 * n}, tensorOptions_), 3 * n};
+    }
+
+    /// @brief Rows of div(sigma) + f at one patch's interior points.
+    LinearRows equilibrium_rows(const PatchResidualCache& cache, int64_t nscalar) const {
+        const int64_t n = cache.eval.numeval;
+        auto out = empty_rows(n);
+        const auto basis = physical_basis(cache.patchIndex, cache.eval, cache.invJ, &cache.hessG);
+        const double mu = mu_[cache.patchIndex];
+        const double lambda = lambda_[cache.patchIndex];
+        const auto& M = basis.M;
+        const auto laplace = M[0][0] + M[1][1] + M[2][2];
+        for (int i = 0; i < 3; ++i) {
+            for (int c = 0; c < 3; ++c) {
+                auto vals = (lambda + mu) * M[i][c];
+                if (i == c) {
+                    vals = vals + mu * laplace;
+                }
+                append_entries(out, basis, i, c, vals, nscalar);
+            }
+        }
+        out.b = cache.body.repeat({n, 1}).flatten();
+        return out;
+    }
+
+    /// @brief Rows of sigma(u) n on one side, appended to `out` (no b).
+    void traction_rows(LinearRows& out, std::size_t patchIndex, iganet::short_t side,
+                       const PreparedPointSet& ev, const torch::Tensor& invJ,
+                       int64_t nscalar) const {
+        const auto basis = physical_basis(patchIndex, ev, invJ, nullptr);
+        const double mu = mu_[patchIndex];
+        const double lambda = lambda_[patchIndex];
+
+        // Same outward normal as traction_on_boundary().
+        const auto fixed = static_cast<iganet::short_t>((side - 1) / 2);
+        auto normal = invJ.index({torch::indexing::Slice(), fixed, torch::indexing::Slice()});
+        if (!MultiPatch::interface_type::side_parameter(side)) {
+            normal = -normal;
+        }
+        normal = normal / normal.norm(2, 1).clamp_min(1e-12).view({-1, 1});
+        const auto nT = normal.transpose(0, 1).unsqueeze(1);      // (3, 1, n)
+        const auto& N = basis.N;                                   // (3, nb, n)
+        const auto Ndotn = (N * nT).sum(0);                        // (nb, n)
+
+        for (int i = 0; i < 3; ++i) {
+            for (int c = 0; c < 3; ++c) {
+                auto vals = mu * N[i] * nT[c] + lambda * nT[i] * N[c];
+                if (i == c) {
+                    vals = vals + mu * Ndotn;
+                }
+                append_entries(out, basis, i, c, vals, nscalar);
+            }
+        }
+    }
+
+    /// @brief Builds A and b per loss term, the exact row scaling, and checks
+    /// the result against the patch-wise evaluation.
+    void assemble_linear_operator() {
+        torch::NoGradGuard noGrad;
+        const auto start = std::chrono::steady_clock::now();
+        const int64_t ntotal = this->outputs(0).size(0);
+        const int64_t nscalar = ntotal / 3;
+
+        // Rows per point set, in the order of the caches.
+        std::vector<LinearRows> collRows, tracRows, ifaceRows;
+        for (const auto& cache : patchResidualCaches_) {
+            collRows.push_back(cache.eval.numeval == 0 ? empty_rows(0)
+                                                       : equilibrium_rows(cache, nscalar));
+        }
+        for (const auto& cache : tractionCaches_) {
+            auto out = empty_rows(cache.eval.numeval);
+            if (cache.eval.numeval > 0) {
+                traction_rows(out, cache.patchIndex, cache.side, cache.eval, cache.invJ, nscalar);
+                out.b = -cache.target.repeat({cache.eval.numeval, 1}).flatten();
+            }
+            tracRows.push_back(std::move(out));
+        }
+        for (const auto& cache : interfaceCaches_) {
+            const bool active = cache.eval1.numeval > 0 && cache.eval2.numeval > 0;
+            auto out = empty_rows(cache.eval1.numeval);
+            if (active) {
+                traction_rows(out, cache.patch1, cache.side1, cache.eval1, cache.invJ1, nscalar);
+                traction_rows(out, cache.patch2, cache.side2, cache.eval2, cache.invJ2, nscalar);
+            }
+            ifaceRows.push_back(std::move(out));
         }
 
+        // Merge duplicate entries (interface columns shared by both patches).
+        const auto coalesce = [&](LinearRows& r) {
+            if (r.vals.numel() == 0) return;
+            auto coo = torch::sparse_coo_tensor(torch::stack({r.rows, r.cols}), r.vals,
+                                                {r.nrows, ntotal})
+                           .coalesce();
+            r.rows = coo.indices()[0];
+            r.cols = coo.indices()[1];
+            r.vals = coo.values();
+        };
+        for (auto* group : {&collRows, &tracRows, &ifaceRows})
+            for (auto& r : *group) coalesce(r);
+
+        // Exact row norms over the free coefficients, as the probes estimated.
+        const auto freeMask =
+            (constraints_.apply(torch::ones({ntotal}, tensorOptions_)) -
+             constraints_.apply(torch::zeros({ntotal}, tensorOptions_))) > 0.5;
+        const auto rowNorm = [&](const LinearRows& r) {
+            auto sq = torch::zeros({r.nrows}, tensorOptions_);
+            if (r.vals.numel() > 0) {
+                const auto keep = freeMask.index_select(0, r.cols).to(tensorOptions_.dtype());
+                sq.index_add_(0, r.rows, r.vals * r.vals * keep);
+            }
+            return sq.sqrt().clamp_min(1e-30);
+        };
+
+        std::vector<torch::Tensor> collNorm, tracNorm, ifaceNorm;
+        for (const auto& r : collRows) collNorm.push_back(rowNorm(r));
+        for (const auto& r : tracRows) tracNorm.push_back(rowNorm(r));
+        for (const auto& r : ifaceRows) ifaceNorm.push_back(rowNorm(r));
+
+        // Scales normalised to geometric mean one, stored in the caches as well
+        // so that the patch-wise evaluation uses identical weights.
+        double logSum = 0.0, lo = std::numeric_limits<double>::max(), hi = 0.0;
+        int64_t count = 0;
+        for (const auto* group : {&collNorm, &tracNorm, &ifaceNorm}) {
+            for (const auto& norm : *group) {
+                if (norm.numel() == 0) continue;
+                logSum += norm.log().sum().template item<double>();
+                lo = std::min(lo, norm.min().template item<double>());
+                hi = std::max(hi, norm.max().template item<double>());
+                count += norm.numel();
+            }
+        }
+        const double geoMean = count > 0 ? std::exp(logSum / static_cast<double>(count)) : 1.0;
+        const auto scaleOf = [&](const torch::Tensor& norm) {
+            return cfg_.rowScaling ? geoMean / norm : torch::ones_like(norm);
+        };
+        for (std::size_t k = 0; k < patchResidualCaches_.size(); ++k)
+            patchResidualCaches_[k].rowScale = scaleOf(collNorm[k]).view({-1, 3});
+        for (std::size_t k = 0; k < tractionCaches_.size(); ++k)
+            tractionCaches_[k].rowScale = scaleOf(tracNorm[k]).view({-1, 3});
+        for (std::size_t k = 0; k < interfaceCaches_.size(); ++k)
+            interfaceCaches_[k].rowScale = scaleOf(ifaceNorm[k]).view({-1, 3});
+
+        // One sparse matrix per loss term. mse_loss averages over the 3n rows of
+        // each point set, which the weight w = 1 / (3n) per row reproduces.
+        const auto build = [&](const std::vector<const LinearRows*>& parts,
+                               const std::vector<torch::Tensor>& scales) {
+            LinearTerm term;
+            std::vector<torch::Tensor> rows, cols, vals, b, w;
+            int64_t offset = 0;
+            for (std::size_t k = 0; k < parts.size(); ++k) {
+                const auto& r = *parts[k];
+                if (r.nrows == 0 || r.vals.numel() == 0) continue;
+                const auto s = scales[k].flatten();
+                rows.push_back(r.rows + offset);
+                cols.push_back(r.cols);
+                vals.push_back(r.vals * s.index_select(0, r.rows));
+                b.push_back(r.b * s);
+                w.push_back(torch::full({r.nrows}, 1.0 / static_cast<double>(r.nrows),
+                                        tensorOptions_));
+                offset += r.nrows;
+            }
+            if (offset == 0) return term;
+            const auto idx = torch::stack({torch::cat(rows), torch::cat(cols)});
+            const auto v = torch::cat(vals);
+            term.A = torch::sparse_coo_tensor(idx, v, {offset, ntotal}).coalesce().to_sparse_csr();
+            term.AT = torch::sparse_coo_tensor(idx.flip(0), v, {ntotal, offset})
+                          .coalesce().to_sparse_csr();
+            term.b = torch::cat(b);
+            term.w = torch::cat(w);
+            term.nnz = v.numel();
+            return term;
+        };
+
+        std::vector<const LinearRows*> forceParts, tfbcParts;
+        std::vector<torch::Tensor> forceScales, tfbcScales;
+        for (std::size_t k = 0; k < tractionCaches_.size(); ++k) {
+            auto& parts = tractionCaches_[k].isForce ? forceParts : tfbcParts;
+            auto& scales = tractionCaches_[k].isForce ? forceScales : tfbcScales;
+            parts.push_back(&tracRows[k]);
+            scales.push_back(tractionCaches_[k].rowScale);
+        }
+        std::vector<const LinearRows*> collParts, ifaceParts;
+        std::vector<torch::Tensor> collScales, ifaceScales;
+        for (std::size_t k = 0; k < collRows.size(); ++k) {
+            collParts.push_back(&collRows[k]);
+            collScales.push_back(patchResidualCaches_[k].rowScale);
+        }
+        for (std::size_t k = 0; k < ifaceRows.size(); ++k) {
+            ifaceParts.push_back(&ifaceRows[k]);
+            ifaceScales.push_back(interfaceCaches_[k].rowScale);
+        }
+        collocationTerm_ = build(collParts, collScales);
+        tractionTerm_ = build(forceParts, forceScales);
+        tfbcTerm_ = build(tfbcParts, tfbcScales);
+        interfaceTerm_ = build(ifaceParts, ifaceScales);
+        linearReady_ = true;
+
+        const double seconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        std::cout << "linear operator: " << count << " residual rows, "
+                  << collocationTerm_.nnz + tractionTerm_.nnz + tfbcTerm_.nnz +
+                         interfaceTerm_.nnz
+                  << " nonzeros, assembled in " << std::fixed << std::setprecision(1)
+                  << seconds << " s" << std::defaultfloat << std::setprecision(6) << "\n";
+        if (cfg_.rowScaling) {
+            std::cout << "row scaling: exact row norms " << lo << " ... " << hi
+                      << " (spread factor " << hi / lo << ")\n";
+        }
+        check_linear_operator();
+    }
+
+    /// @brief Compares the linear operator with the patch-wise evaluation for a
+    /// random displacement and stops if the two disagree.
+    void check_linear_operator() const {
+        torch::NoGradGuard noGrad;
+        const int64_t ntotal = this->outputs(0).size(0);
+        const auto u = constraints_.apply(torch::randn({ntotal}, tensorOptions_));
+        const auto linear = loss_parts_linear(u);
+        const auto patchwise = loss_parts_patchwise(u);
+        double worst = 0.0;
+        for (const auto& [a, b] : {std::pair{linear.collocation, patchwise.collocation},
+                                   std::pair{linear.traction, patchwise.traction},
+                                   std::pair{linear.tfbc, patchwise.tfbc},
+                                   std::pair{linear.interfaceTraction,
+                                             patchwise.interfaceTraction}}) {
+            const double x = a.template item<double>();
+            const double y = b.template item<double>();
+            worst = std::max(worst, std::abs(x - y) / std::max(std::abs(y), 1e-300));
+        }
+        std::cout << "linear operator check against patch-wise evaluation: "
+                     "max. relative deviation "
+                  << worst << "\n";
+        if (!(worst < 1e-6)) {
+            throw std::runtime_error(
+                "Linear operator disagrees with the patch-wise loss evaluation "
+                "(relative deviation " + std::to_string(worst) + "). Set "
+                "multipatch.linear_operator to false to train without it.");
+        }
+    }
+
+    /// @brief One loss term as weighted squared residual of r = A u + b.
+    torch::Tensor linear_term_loss(const torch::Tensor& displacementTensor,
+                                   const auto& term) const {
+        if (!term.A.defined()) {
+            return torch::zeros({}, tensorOptions_);
+        }
+        const auto r = SparseMatVec::apply(displacementTensor, term.A, term.AT) + term.b;
+        return (term.w * r * r).sum();
+    }
+
+    LossParts loss_parts_linear(const torch::Tensor& displacementTensor) const {
+        const auto collocationLoss = linear_term_loss(displacementTensor, collocationTerm_);
+        const auto tractionLoss = linear_term_loss(displacementTensor, tractionTerm_);
+        const auto tfbcLoss = linear_term_loss(displacementTensor, tfbcTerm_);
+        const auto interfaceLoss = linear_term_loss(displacementTensor, interfaceTerm_);
+        const auto supervisedLoss = supervised_loss(displacementTensor);
         return {
             cfg_.collocationWeight * collocationLoss + tractionLoss + tfbcLoss +
                 interfaceLoss + supervisedLoss,
@@ -1106,6 +1542,21 @@ private:
     double matchingTolerance_{5e-5};   // see MATCHING_TOLERANCE in the examples
     std::vector<double> lambda_;
     std::vector<double> mu_;
+
+    /// @brief Row-scaled r = A u + b of one loss term, see
+    /// assemble_linear_operator(). w averages each point set over its rows.
+    struct LinearTerm {
+        torch::Tensor A;
+        torch::Tensor AT;
+        torch::Tensor b;
+        torch::Tensor w;
+        int64_t nnz{0};
+    };
+    LinearTerm collocationTerm_;
+    LinearTerm tractionTerm_;
+    LinearTerm tfbcTerm_;
+    LinearTerm interfaceTerm_;
+    bool linearReady_{false};
 };
 
 } // namespace iganet_elasticity::multipatch
