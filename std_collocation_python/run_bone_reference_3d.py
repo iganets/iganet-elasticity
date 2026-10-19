@@ -59,11 +59,11 @@ from pathlib import Path
 import numpy as np
 import splinepy
 from scipy.sparse import coo_matrix, diags
-from scipy.sparse.linalg import lsqr, spsolve
 from scipy.spatial import cKDTree
 
 from .apply_bc_3d import interior_pde_local_block, traction_local_block
 from .bspline import bspline_all_basis_and_ders, greville_abscissae
+from .iga_collocation_multipatch_3d import solve_least_squares
 from .mapping_3d import mapping3d
 from .prepare_bone_geometry import read_interface_lines, side_direction
 from .run_std_coll import get_optional, get_required, load_json_with_line_comments
@@ -395,20 +395,17 @@ def solve(xml_path: Path, cfg: dict, quiet: bool = False, return_system: bool = 
     scaled = diags(1.0 / row_norm) @ reduced
     scaled_rhs = reduced_rhs / row_norm
 
-    # Direct solve of the normal equations, cross-checked against an iterative
-    # least-squares solver. Agreement is the check that the system is still
-    # well enough conditioned to trust.
-    gram = (scaled.T @ scaled).tocsc()
-    direct = spsolve(gram, scaled.T @ scaled_rhs)
-    iterative = lsqr(scaled, scaled_rhs, atol=1e-13, btol=1e-13, iter_lim=200000)[0]
-
-    def least_squares_residual(x):
-        return float(np.linalg.norm(scaled @ x - scaled_rhs)
-                     / max(np.linalg.norm(scaled_rhs), 1.0))
-
-    log(f"ausgeglichen | rel. Residuum direkt {least_squares_residual(direct):.2e}"
-        f" | iterativ {least_squares_residual(iterative):.2e}"
-        f" | Unterschied der Loesungen {float(np.abs(direct - iterative).max()):.2e}")
+    # Direct solve of the normal equations. The iterative lsqr cross-check is
+    # optional (simulation.reference_lsqr_check, default off), see
+    # solve_least_squares().
+    direct, residual, check = solve_least_squares(
+        scaled, scaled_rhs, bool(get_optional(cfg, "simulation.reference_lsqr_check", False)))
+    log(f"ausgeglichen | rel. Residuum direkt {residual:.2e}")
+    if check is not None:
+        # Printed even with --quiet: an explicitly requested check is pointless
+        # if its outcome stays invisible.
+        print(f"lsqr-Gegencheck | rel. Residuum iterativ {check['iterative_residual']:.2e}"
+              f" | Unterschied der Loesungen {check['max_difference']:.2e}")
 
     solution = fixed_value.copy()
     solution[free] = direct

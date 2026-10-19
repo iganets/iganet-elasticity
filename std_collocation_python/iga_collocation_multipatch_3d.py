@@ -64,6 +64,40 @@ def _local_node_index(i: int, j: int, k: int, mcp: int, ncp: int) -> int:
     return (i - 1) + mcp * (j - 1) + mcp * ncp * (k - 1)
 
 
+def solve_least_squares(scaled, scaled_rhs, lsqr_check: bool = False):
+    """Least-squares solution of the row-scaled collocation system.
+
+    Solved directly through the normal equations. Their condition number is the
+    square of the system's, so an optional cross-check solves the same problem
+    with the iterative least-squares solver lsqr, which works on the system
+    itself. Agreement shows that squaring the condition did not spoil the
+    direct solution.
+
+    The check is off by default: it took most of the reference's run time
+    (up to 200000 iterations, 10-25 min on the bone) and agreed with the direct
+    solution in every run so far. It tests only whether the system is SOLVED
+    correctly, not whether it is SET UP correctly. Enable it with
+    {"simulation": {"reference_lsqr_check": true}}.
+
+    Returns (solution, relative residual of the solution, check) where check is
+    None or a dict with the iterative residual and the largest difference
+    between the two solutions.
+    """
+    gram = (scaled.T @ scaled).tocsc()
+    direct = spsolve(gram, scaled.T @ scaled_rhs)
+    norm_rhs = max(np.linalg.norm(scaled_rhs), 1.0)
+    residual = float(np.linalg.norm(scaled @ direct - scaled_rhs) / norm_rhs)
+    check = None
+    if lsqr_check:
+        iterative = lsqr(scaled, scaled_rhs, atol=1e-13, btol=1e-13, iter_lim=200000)[0]
+        check = {
+            "iterative_residual": float(np.linalg.norm(scaled @ iterative - scaled_rhs)
+                                        / norm_rhs),
+            "max_difference": float(np.abs(direct - iterative).max()),
+        }
+    return direct, residual, check
+
+
 def solve_elasticity_collocation_multipatch_chain_3d(
         num_patches: int,
         p: int, q: int, r: int,
@@ -75,7 +109,8 @@ def solve_elasticity_collocation_multipatch_chain_3d(
         cube_size: float = 1.0,
         quiet: bool = False,
         return_system: bool = False,
-        rim_rule: str = "stiffer"):
+        rim_rule: str = "stiffer",
+        lsqr_check: bool = False):
     """
     Solve linear elasticity by direct isogeometric collocation on a chain
     of `num_patches` unit cubes (cube_size each) glued along x.
@@ -351,14 +386,15 @@ def solve_elasticity_collocation_multipatch_chain_3d(
     scaled = diags(1.0 / row_norm) @ reduced
     scaled_rhs = reduced_rhs / row_norm
 
-    gram = (scaled.T @ scaled).tocsc()
-    direct = spsolve(gram, scaled.T @ scaled_rhs)
-    iterative = lsqr(scaled, scaled_rhs, atol=1e-13, btol=1e-13, iter_lim=200000)[0]
+    direct, res, check = solve_least_squares(scaled, scaled_rhs, lsqr_check)
     if not quiet:
-        res = np.linalg.norm(scaled @ direct - scaled_rhs) / max(np.linalg.norm(scaled_rhs), 1.0)
         print(f"ausgeglichen | {next_row} Zeilen fuer {int(free.sum())} freie Werte "
-              f"| rel. Residuum {res:.2e} "
-              f"| direkt gegen iterativ {float(np.abs(direct - iterative).max()):.2e}")
+              f"| rel. Residuum {res:.2e}")
+    if check is not None:
+        # Printed even with --quiet: an explicitly requested check is pointless
+        # if its outcome stays invisible.
+        print(f"lsqr-Gegencheck | rel. Residuum iterativ {check['iterative_residual']:.2e} "
+              f"| direkt gegen iterativ {check['max_difference']:.2e}")
 
     sol = fixed_value.copy()
     sol[free] = direct

@@ -175,6 +175,7 @@ def run(config_path: Path, out_path: Path, quiet: bool = False) -> None:
         mcp=ncp, ncp=ncp, lcp=ncp,
         E=E, nu=nu, bc=bc, body_force=body_force, cube_size=cube_size,
         quiet=quiet,
+        lsqr_check=bool(get_optional(cfg, "simulation.reference_lsqr_check", False)),
     )
 
     if not quiet:
