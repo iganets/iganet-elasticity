@@ -179,6 +179,13 @@ MultipatchConfig loadMultipatchConfig(const nlohmann::json& j) {
         if (mj.contains("row_scaling_probes")) {
             cfg.rowScalingProbes = mj["row_scaling_probes"].get<int>();
         }
+        // The residual is assembled once as a sparse matrix and every loss
+        // evaluation is a matrix-vector product (see assemble_linear_operator()
+        // in lin_elasticity_multipatch_net.hpp). {"multipatch": {"linear_operator":
+        // false}} restores the patch-wise evaluation.
+        if (mj.contains("linear_operator")) {
+            cfg.linearOperator = mj["linear_operator"].get<bool>();
+        }
         if (mj.contains("supervised_weight")) {
             cfg.supervisedWeight = mj["supervised_weight"].get<double>();
         }
@@ -618,6 +625,16 @@ int main(int argc, char** argv) {
         lbfgsOptions.history_size(cfg.lbfgsHistorySize);
         lbfgsOptions.tolerance_grad(1e-12);
         lbfgsOptions.tolerance_change(1e-12);
+        // max_eval must be set explicitly. LBFGSOptions leaves it empty and only
+        // the LBFGS constructor fills it in (max_iter * 5 / 4), but
+        // optimizerOptionsReset() below replaces the constructor's options with
+        // these. LibTorch then dereferences the empty optional - undefined
+        // behaviour that read as 0 on the TU machine (LBFGS stopped after one
+        // iteration, 2 loss evaluations per epoch) and as a large value on
+        // another machine (20 iterations per epoch), so the same config trained
+        // ten times longer there.
+        lbfgsOptions.max_iter(20);
+        lbfgsOptions.max_eval(25);
         net.optimizerOptionsReset(lbfgsOptions);
 
         if (cfg.supervisedLearning) {
