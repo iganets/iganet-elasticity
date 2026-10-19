@@ -4,8 +4,11 @@ By default, renders the deformed shape from the classical collocation
 reference solution (std_collocation_python/run_multipatch_reference_3d.py,
 a direct linear solve for a config-driven number of chained unit cubes) on
 the left against the deformed shape from the trained IgANet result on the
-right, for a direct visual comparison. Pass --single to fall back to the
-original reference-vs-deformed view of one result file instead.
+right, for a direct visual comparison. The undeformed geometry is drawn over
+the reference solution as a see-through grid of its outer surface, so the
+displacement is visible directly; pass --no-outline to drop it. Pass --single
+to fall back to the original reference-vs-deformed view of one result file
+instead.
 
 This script is deliberately near-identical to show_3D_multi_patch_bone.py
 (which does the same for the other 3D multipatch example) rather than
@@ -156,6 +159,52 @@ def boundary_control_points(patch_data, deformed=True):
     return result
 
 
+# Undeformed geometry drawn over the reference solution as a see-through grid,
+# so that the displacement can be read off directly instead of being guessed
+# against a picture of the bone held in memory.
+OUTLINE_LINE_COLOR = "black"
+OUTLINE_LINE_ALPHA = 0.45
+OUTLINE_SURFACE_COLOR = "gray"
+OUTLINE_SURFACE_ALPHA = 0.06
+
+
+def undeformed_outline(patches_data):
+    """Outer surface of the undeformed geometry as a see-through grid.
+
+    Every patch contributes its six boundary faces. A face shared by two
+    patches is an interface inside the body and is dropped - its grid lines
+    would otherwise show through everywhere. What remains is the outer skin,
+    drawn with its knot lines (the element grid) and an almost transparent
+    surface. Two faces count as the same interface when the centre and the
+    bounding box of their control points coincide.
+    """
+    import numpy as _np
+
+    faces = []
+    for patch_data in patches_data:
+        faces.extend(make_patch(patch_data, deformed=False).extract.boundaries())
+
+    points = [_np.asarray(face.control_points, dtype=float) for face in faces]
+    signature = _np.array([_np.concatenate([p.mean(axis=0), p.min(axis=0), p.max(axis=0)])
+                           for p in points])
+    all_points = _np.vstack(points)
+    tolerance = 1e-4 * float((all_points.max(axis=0) - all_points.min(axis=0)).max())
+    distance = _np.abs(signature[:, None, :] - signature[None, :, :]).max(axis=2)
+    shared = (distance < tolerance).sum(axis=1) > 1   # itself plus a twin
+
+    outline = [face for face, is_shared in zip(faces, shared) if not is_shared]
+    for face in outline:
+        face.show_options["c"] = OUTLINE_SURFACE_COLOR
+        face.show_options["alpha"] = OUTLINE_SURFACE_ALPHA
+        face.show_options["knots"] = True
+        face.show_options["knot_c"] = OUTLINE_LINE_COLOR
+        face.show_options["knot_alpha"] = OUTLINE_LINE_ALPHA
+        face.show_options["control_points"] = False
+        face.show_options["control_mesh"] = False
+        face.show_options["control_point_ids"] = False
+    return outline
+
+
 def print_patch_legend(patches_data):
     print("Patch legend (xml_id: RGB color):")
     for index, patch_data in enumerate(patches_data):
@@ -287,8 +336,11 @@ def render_comparison(
     plot_loss: bool = True,
     save_screenshot: bool = False,
     exaggerate: float = 1.0,
+    outline: bool = True,
 ):
-    # Left: classical collocation reference solution (direct linear solve).
+    # Left: classical collocation reference solution (direct linear solve),
+    # with the undeformed geometry as a see-through grid on top (outline=False
+    # drops it).
     # Right: trained IgANet result. Both are shown in their deformed
     # configuration so the two solutions can be compared directly.
     reference_result = load_result(reference_path)
@@ -305,6 +357,9 @@ def render_comparison(
 
     style_patches(reference_patches)
     style_patches(trained_patches)
+    reference_view = [*reference_patches]
+    if outline:
+        reference_view.extend(undeformed_outline(reference_result["patches"]))
 
     if show_patch_ids:
         print("Reference solution:")
@@ -343,7 +398,7 @@ def render_comparison(
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         splinepy.show(
-            [*reference_patches, *reference_point_actors],
+            [*reference_view, *reference_point_actors],
             [*trained_patches, *trained_point_actors],
             offscreen=True,
             interactive=False,
@@ -374,7 +429,7 @@ def render_comparison(
         return
 
     splinepy.show(
-        [*reference_patches, *reference_point_actors],
+        [*reference_view, *reference_point_actors],
         [*trained_patches, *trained_point_actors],
         control_mesh=False,
         control_point_ids=False,
@@ -526,6 +581,13 @@ def main():
              "black dots, to visually compare where the two solutions place them",
     )
     parser.add_argument(
+        "--no-outline",
+        dest="outline",
+        action="store_false",
+        help="Do NOT draw the undeformed geometry as a see-through grid over the "
+             "reference solution (comparison view only)",
+    )
+    parser.add_argument(
         "--no-loss-plot",
         action="store_true",
         help="Skip the separate training-loss plot window shown after the 3D solution "
@@ -592,6 +654,7 @@ def main():
         plot_loss=not args.no_loss_plot,
         save_screenshot=args.screenshot,
         exaggerate=args.exaggerate,
+        outline=args.outline,
     )
 
 
