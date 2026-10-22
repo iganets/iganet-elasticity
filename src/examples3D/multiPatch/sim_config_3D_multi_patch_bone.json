@@ -1,7 +1,7 @@
 {
   "simulation": {
-    "max_epoch": 5,
-    "run_collocation_reference": false,
+    "max_epoch": 100,
+    "run_collocation_reference": true,
     "supervised_learning": false,
     "min_loss": 1e-06,
     "device": "cpu"
@@ -16,8 +16,7 @@
   },
   "network": {
     "hidden_layers": [
-      4,
-      4
+      1
     ]
   },
   "multipatch": {
@@ -548,12 +547,12 @@
     {
       "patch_id": 106,
       "boundary_conditions": {
-        "diri_sides": [
+        "force_sides": [
           [
             6,
             0.0,
             0.0,
-            0.0
+            -10.0
           ]
         ],
         "tfbc_sides": [
@@ -591,13 +590,8 @@
     {
       "patch_id": 110,
       "boundary_conditions": {
-        "diri_sides": [
-          [
-            6,
-            0.0,
-            0.0,
-            0.0
-          ]
+        "tfbc_sides": [
+            6
         ]
       }
     },

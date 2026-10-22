@@ -17,9 +17,9 @@
     ]
   },
   "simulation": {
-    "max_epoch": 50,
+    "max_epoch": 200,
     "run_collocation_reference": true,
-    "supervised_learning": true,
+    "supervised_learning": false,
     "device": "cpu"
   },
   "material": {
@@ -28,7 +28,7 @@
     "patches": [
       {
         "patch_id": 0,
-        "young_modulus": 21,
+        "young_modulus": 210,
         "poisson_ratio": 0.25
       },
       {
@@ -39,7 +39,7 @@
     ]
   },
   "geometry": {
-    "mode": "xml",
+    "mode": "parametric",
     "multipatch_xml_path": "filedata/five_cube_parametric.xml",
     "multipatch_id": 0
   },
@@ -60,7 +60,7 @@
   "multipatch": {
     "learning_rate": 1,
     "supervised_weight": 100000.0,
-    "num_patches": 5,
+    "num_patches": 2,
     "cube_size": 1.0,
     "body_force": [
       0.0,
@@ -76,7 +76,7 @@
           0
         ]
       ],
-      "force_sides": [[3,0,10,0]],
+      "force_sides": [[3,0,0.2,0]],
       "tfbc_sides": [
         2,
         4,
