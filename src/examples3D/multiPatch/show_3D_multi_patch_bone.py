@@ -3,9 +3,9 @@
 By default, renders the deformed shape from the classical collocation
 reference solution (std_collocation_python/run_bone_reference_3d.py) on the
 left against the deformed shape from the trained IgANet result on the right.
-The undeformed geometry is drawn over the reference solution as a see-through
-grid of its outer surface, so the displacement is visible directly; pass
---no-outline to drop it.
+The undeformed geometry is drawn over both solutions as a see-through grid of
+its outer surface, so the displacement is visible directly; pass --no-outline
+to drop it.
 Pass --single to fall back to one result file's own reference-vs-deformed
 view. This script is deliberately
 near-identical to show_3D_multi_patch_parametrized.py (which does the same
@@ -132,7 +132,7 @@ def style_patches(patches):
         patch.show_options["c"] = patch_color(index)
 
 
-# Undeformed geometry drawn over the reference solution as a see-through grid,
+# Undeformed geometry drawn over both solutions as a see-through grid,
 # so that the displacement can be read off directly instead of being guessed
 # against a picture of the bone held in memory.
 OUTLINE_LINE_COLOR = "black"
@@ -340,9 +340,10 @@ def render_comparison(reference_path: Path, trained_path: Path, output_path: Pat
                       show_patch_ids: bool, interactive: bool = True,
                       exaggerate: float = 1.0, plot_loss: bool = True,
                       save_screenshot: bool = False, outline: bool = True):
-    # Left: classical collocation reference (direct linear solve), with the
-    # undeformed geometry as a see-through grid on top (outline=False drops it).
-    # Right: trained IgANet result. Both deformed, so they compare directly.
+    # Left: classical collocation reference (direct linear solve).
+    # Right: trained IgANet result. Both deformed, so they compare directly, and
+    # both with the undeformed geometry as a see-through grid on top
+    # (outline=False drops it).
     reference_result = load_result(reference_path)
     trained_result = load_result(trained_path)
 
@@ -353,8 +354,10 @@ def render_comparison(reference_path: Path, trained_path: Path, output_path: Pat
     style_patches(reference_patches)
     style_patches(trained_patches)
     reference_view = [*reference_patches]
+    trained_view = [*trained_patches]
     if outline:
         reference_view.extend(undeformed_outline(reference_result["patches"]))
+        trained_view.extend(undeformed_outline(trained_result["patches"]))
 
     if show_patch_ids:
         print("Reference solution:")
@@ -365,7 +368,7 @@ def render_comparison(reference_path: Path, trained_path: Path, output_path: Pat
     if save_screenshot:
         output_path = figure_path(trained_path, "ansicht")
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        splinepy.show(reference_view, [*trained_patches],
+        splinepy.show(reference_view, trained_view,
                       offscreen=True, interactive=False, close=True,
                       **camera_kwargs(reference_patches, trained_patches))
         try:
@@ -399,7 +402,7 @@ def render_comparison(reference_path: Path, trained_path: Path, output_path: Pat
                           title="Trend in Training Loss")
         return
 
-    splinepy.show(reference_view, [*trained_patches],
+    splinepy.show(reference_view, trained_view,
                   control_mesh=False, control_point_ids=False,
                   **camera_kwargs(reference_patches, trained_patches))
     plot_loss_history(loss_history, enabled=plot_loss,
@@ -547,7 +550,7 @@ def main():
         dest="outline",
         action="store_false",
         help="Do NOT draw the undeformed geometry as a see-through grid over the "
-             "reference solution (comparison view only)",
+             "reference and the trained solution (comparison view only)",
     )
     parser.add_argument(
         "--no-loss-plot",
