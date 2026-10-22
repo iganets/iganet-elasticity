@@ -1,4 +1,5 @@
 og*
+filedata/bone*.xml
 .vscode/
 build/
 results/*
